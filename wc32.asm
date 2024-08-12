@@ -31,9 +31,9 @@ REG3 equ ecx         ; Free register #3
 REG4 equ edx         ; Free register #4
 
 CELL_SZ = 4
-CODE_SZ = 64*1024
-DICT_SZ = 64*1024
-VARS_SZ = 64*1024
+CODE_SZ =  64*1024
+DICT_SZ =  64*1024
+VARS_SZ = 256*1024
 TIB_SZ  = 128
 xNum    = $70000000
 xMask   = $0FFFFFFF
@@ -62,10 +62,10 @@ macro m_pop val {
 ; ******************************************************************************
 macro addDict XT, Flags, Len, Name, Tag {
     align CELL_SZ
-    d_#Tag: dd LastTag
+    Tag: dd LastTag
             dd XT
             db Flags, Len, Name, 0
-    LastTag equ d_#Tag
+    LastTag equ Tag
 }
 
 ; ******************************************************************************
@@ -534,9 +534,10 @@ rStackPtr   dd  rStack
 lStackPtr   dd  lStack
 HERE        dd  THE_CODE
 VHERE       dd  THE_VARS
-LAST        dd  d_tg999999
+LAST        dd  tagLast
 HERE1       dd  ?
-TIB         dd  TIB_SZ dup 0       ; TIB
+TIB         dd  TIB_SZ dup 0
+ToIn        dd  ?
 
 buf1        db   16 dup 0       ; Buffer
 dStack      dd   64 dup 0       ; Data stack
@@ -554,7 +555,7 @@ xCold       dd xHA, xDot, xHere, xDot, xLast, xDot, xCell, xDot
 xWarm       dd xInterp, xBench, doJmp, xWarm
 xInterp     dd xOK, xTIB, xTIBSZ, xAccept, doDec, doDec, xTIB, doAdd, xNum, doSwap, doCStore
                 dd xTIB, doDup, doLen, doType, xSpace
-                ; Set >IN to TIB
+                dd xTIB, xToIn, doStore
                 ; LOOP: get the next word. If none left, exit
                 ; search in dict for the word
                 ; if found, compile it (or execute if immediate) and jmp to LOOP
@@ -589,6 +590,7 @@ x2Cells     dd xNum+2, xCells, doExit
 xOK         dd doLit, okStr, xNum+3, doType, xCR, doExit
 xTIB        dd doLit, TIB, doExit
 xTIBSZ      dd xNum+TIB_SZ, doExit
+xToIn       dd doLit, ToIn, doExit
 xAccept     dd doReadL, doExit
 xWords      dd xLast
 xWdsLoop        dd xDeShowVB, xTab, doDup, doJmpNZ, xWdsLoop
@@ -598,28 +600,32 @@ xBench      dd doTimer, doLit, 500000000, doDup, xDot, doFor, doNext
 
 ; ----------------------------------------------------------------
 THE_DICT:
-        addDict doBye,    0, 3, "BYE",   tg000000
-        addDict doInc,    0, 2, "1+",    tg200000
-        addDict doDec,    0, 2, "1-",    tg200100
-        addDict doFetch,  0, 1, "@",     tg200200
-        addDict doFor,    0, 3, "FOR",   tg200300
-        addDict doI,      0, 1, "I",     tg200400
-        addDict doNext,   0, 4, "NEXT",  tg200500
-        addDict xTIB,     0, 3, "TIB",   tg200600
-        addDict xTab,     0, 3, "TAB",   tg200700
-        addDict xCR,      0, 2, "CR",    tg200800
-        addDict xWords,   0, 5, "WORDS", tg200900
-        addDict xCell,    0, 4, "CELL",  tg201000
-        addDict xCells,   0, 4, "CELLS", tg201001
-        addDict doItoA,   0, 3, "I>A",   tg201100
-        addDict xHere,    0, 4, "HERE",  tg201200
-        addDict xHA,      0, 2, "HA",    tg201300
-        addDict xLast,    0, 4, "LAST",  tg201400
-        addDict xLA,      0, 2, "LA",    tg201500
-        addDict doLen,    0, 5, "S-LEN", tg201600
-        addDict doKey,    0, 3, "KEY",   tg201700
-        addDict doQKey,   0, 4, "QKEY",  tg201800
-        addDict doDup,    0, 3, "DUP",   tg999999
+        addDict doBye,    0, 3, "BYE",   tag0000
+        addDict doInc,    0, 2, "1+",    tag0010
+        addDict doDec,    0, 2, "1-",    tag0011
+        addDict doFetch,  0, 1, "@",     tag0020
+        addDict doStore,  0, 1, "!",     tag0021
+        addDict doCFetch, 0, 2, "C@",    tag0022
+        addDict doCStore, 0, 2, "C!",    tag0023
+        addDict doFor,    0, 3, "FOR",   tag0030
+        addDict doI,      0, 1, "I",     tag0031
+        addDict doNext,   0, 4, "NEXT",  tag0032
+        addDict xTIB,     0, 3, "TIB",   tag0060
+        addDict xToIn,    0, 3, ">IN",   tag0061
+        addDict xTab,     0, 3, "TAB",   tag0070
+        addDict xCR,      0, 2, "CR",    tag0080
+        addDict xWords,   0, 5, "WORDS", tag0090
+        addDict xCell,    0, 4, "CELL",  tag0100
+        addDict xCells,   0, 4, "CELLS", tag0101
+        addDict doItoA,   0, 3, "I>A",   tag0110
+        addDict xHere,    0, 4, "HERE",  tag0120
+        addDict xHA,      0, 2, "HA",    tag0130
+        addDict xLast,    0, 4, "LAST",  tag0140
+        addDict xLA,      0, 2, "LA",    tag0150
+        addDict doLen,    0, 5, "S-LEN", tag0160
+        addDict doKey,    0, 3, "KEY",   tag0170
+        addDict doQKey,   0, 4, "QKEY",  tag0180
+        addDict doDup,    0, 3, "DUP",   tagLast
 ; TODO add more built-in dictionary entries here
         rb  DICT_SZ
 DICT_END:
