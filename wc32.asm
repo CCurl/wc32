@@ -3,9 +3,6 @@
 ; FOR_OS equ WINDOWS
 ; FOR_OS equ LINUX
 
-; A dictionary entry looks like this:
-; Next/4, XT/4, Flags/1, Len/1, Name/?, NULL/1
-
 match =WINDOWS, FOR_OS {
         format PE console
         include 'win32ax.inc'
@@ -39,22 +36,30 @@ xNum    = $70000000
 xMask   = $0FFFFFFF
 LastTag equ 0
 
+; A dictionary entry looks like this:
+; Next/4, XT/4, Flags/1, Len/1, Name/?, NULL/1
+DE_NEXT_OFFSET  = (0)
+DE_XT_OFFSET    = (CELL_SZ)
+DE_FLAGS_OFFSET = (CELL_SZ*2)
+DE_LEN_OFFSET   = (CELL_SZ*2)+1
+DE_NAME_OFFSET  = (CELL_SZ*2)+2
+
 ; ******************************************************************************
 ; MACROS
-macro m_getTOS val { mov val, TOS }
-macro m_setTOS val { mov TOS, val }
-macro m_get2ND val { mov val, [STKP] }
-macro m_set2ND val { mov [STKP], val }
+macro getTOS val { mov val, TOS }
+macro setTOS val { mov TOS, val }
+macro get2ND val { mov val, [STKP] }
+macro set2ND val { mov [STKP], val }
 
 macro m_push val {
        add STKP, CELL_SZ
        mov [STKP], TOS
-       m_setTOS val
+       setTOS val
 }
 
 ; ******************************************************************************
 macro m_pop val {
-       m_getTOS val
+       getTOS val
        mov TOS, [STKP]
        sub STKP, CELL_SZ
 }
@@ -91,7 +96,6 @@ warm:   mov     eax, rStack
         mov     esi, THE_ROM
         cld
         jmp     wcRun
-        call    doBye
         ret
 
 ; ******************************************************************************
@@ -186,21 +190,21 @@ doJmpZ: m_pop  ebx
 
 ; ******************************************************************************
 doJmpNZ: m_pop  ebx
-        lodsd
-        test    ebx, ebx
-        jnz     doJ
-        ret
+         lodsd
+         test   ebx, ebx
+         jnz    doJ
+         ret
 
 ; ******************************************************************************
-doFetch: m_getTOS   edx
-        m_setTOS    [edx]
-        ret
+doFetch: getTOS   edx
+         setTOS   [edx]
+         ret
 
 ; ******************************************************************************
 doStore: m_pop  edx
-        m_pop   eax
-        mov     [edx], eax
-        ret
+         m_pop  eax
+         mov    [edx], eax
+         ret
 
 ; ******************************************************************************
 doCFetch: xor     eax, eax
@@ -291,9 +295,11 @@ match =WINDOWS, FOR_OS {
                  m_push  eax
                  ret
         ; **********************************************************************
-        doEmit: m_pop   eax
+        doEmit: push    eax
+                m_pop   eax
                 mov     [buf1], al
                 invoke  WriteConsole, [hStdOut], buf1, 1, NULL, NULL
+                pop     eax
                 ret
         ; **********************************************************************
         doType: m_pop   eax              ; Len ( addr len-- )
@@ -303,8 +309,13 @@ match =WINDOWS, FOR_OS {
         ; **********************************************************************
         doReadL: m_pop  edx              ; buffer size
                  m_pop  ecx              ; buffer
+                 push   ecx
                  invoke ReadConsole, [hStdIn], ecx, edx, bytesRead, 0
+                 pop    ecx
                  mov    eax, [bytesRead]
+                 dec    eax             ; Remove the <LF>
+                 dec    eax             ; Remove the <CR>
+                 mov    [ecx+eax], BYTE 0
                  m_push eax
                  ret
         ; **********************************************************************
@@ -326,13 +337,15 @@ match =LINUX, FOR_OS {
                 m_push  eax
                 ret
         ; **********************************************************************
-        doEmit: m_pop   eax             ; ( ch-- )
+        doEmit: push    eax
+                m_pop   eax             ; ( ch-- )
                 mov     [buf1], al      ; put char in message
                 mov     eax,4           ; system call number (sys_write)
                 mov     ebx,1           ; file descriptor (stdout)
                 mov     ecx,buf1        ; message to write
                 mov     edx,1           ; message length
                 int     0x80            ; call kernel
+                pop     eax
                 ret
         ; **********************************************************************
         doType: m_pop   edx             ; Len ( string len-- )
@@ -346,8 +359,12 @@ match =LINUX, FOR_OS {
                  m_pop  ecx             ; buffer
                  mov    ebx, 0          ; stdin
                  mov    eax, 3          ; sys_read
+                 push   ecx
                  int    0x80
+                 pop    ecx
+                 dec    eax             ; Remove the <LF>
                  m_push eax
+                 mov    [ecx+eax], BYTE 0
                 ret
         ; **********************************************************************
         doQKey: ; invoke LinuxKey
@@ -467,17 +484,36 @@ doDot:  push    eax
         ret
 
 ; ******************************************************************************
-doDup:  m_push  TOS
+doDotS: m_push  '('
+        call    doEmit
+        mov     eax, dStack+CELL_SZ
+.L:     cmp     eax, STKP
+        jg      .X
+        m_push  [eax]
+        call    doDot
+        m_push  32
+        call    doEmit
+        add     eax, CELL_SZ
+        jmp     .L
+.X:     call    doDup
+        call    doDot
+        m_push  ')'
+        call    doEmit
         ret
 
 ; ******************************************************************************
-doSwap: m_get2ND    eax
-        m_set2ND    TOS
-        m_setTOS    eax
+doDup:  getTOS  eax
+        m_push  eax
         ret
 
 ; ******************************************************************************
-doOver: m_get2ND    eax
+doSwap: get2ND    eax
+        set2ND    TOS
+        setTOS    eax
+        ret
+
+; ******************************************************************************
+doOver: get2ND      eax
         m_push      eax
         ret
 
@@ -498,6 +534,77 @@ doLen:  m_pop   edx             ; ( addr--len )
         inc     edx
         jmp     .L
 .X:     m_push  ecx
+        ret
+
+; ******************************************************************************
+skipWS: mov     edx, [ToIn]     ; Updates ToIn to point to the next non-whitespace char
+        xor     eax, eax
+.L:     mov     al, [edx]
+        cmp     al, 32
+        jg      .X
+        test    al, al
+        jz      .X
+        inc     edx
+        jmp     .L
+.X:     mov     [ToIn], edx
+        ret
+
+
+; ******************************************************************************
+nextWd: call    skipWS          ; ( --addr len )
+        mov     ebx, buf2
+        m_push  ebx
+        m_push  0
+.L:     mov     al, [edx]
+        cmp     al, 32
+        jle     .X
+        mov     [ebx], al
+        inc     edx
+        inc     ebx
+        inc     TOS
+        cmp     TOS, 31
+        jl      .L
+.X:     mov     [ToIn], edx
+        mov     [ebx], BYTE 0
+        ret
+
+; ******************************************************************************
+strCmp:         ; Compare the strings pointed to by EAX and EBX - return CARRY=1 if the same
+                ; NOTE: EDX is destroyed
+.LP:    mov     dl, [eax]
+        mov     dh, [ebx]
+        cmp     dl, dh
+        jne     .NEQ
+        test    dl, dl          ; End of strings?
+        jz      .EQ
+        inc     eax
+        inc     ebx
+        jmp     .LP
+.EQ:    stc
+        ret
+.NEQ:   clc
+        ret
+
+; ******************************************************************************
+dictFind:       ; ( addr--xt fl dp | addr 0 )
+        getTOS  ebx
+        mov     ecx, [LAST]
+.L:     test    ecx, ecx
+        jz      .NF
+        mov     eax, [ecx+DE_NAME_OFFSET]
+        push    ebx
+        call    strCmp
+        pop     ebx
+        jc      .FOUND
+        mov     ecx, [ecx]
+        jmp     .L
+.FOUND: mov     al, [edx+DE_FLAGS_OFFSET]
+        and     eax, 0xFF
+        setTOS  DWORD [edx+DE_XT_OFFSET]   ; XT
+        m_push  eax                        ; FLAGS
+        m_push  ecx                        ; DP - dict entry pointer
+        ret
+.NF:    m_push  ecx
         ret
 
 ; ******************************************************************************
@@ -539,29 +646,34 @@ HERE1       dd  ?
 TIB         dd  TIB_SZ dup 0
 ToIn        dd  ?
 
-buf1        db   16 dup 0       ; Buffer
+buf1        db   32 dup 0       ; Buffer (used for EMIT)
 dStack      dd   64 dup 0       ; Data stack
-buf2        dd    4 dup 0       ; Buffer
+buf2        db   32 dup 0       ; Buffer (used for nextWd)
 rStack      dd   64 dup 0       ; Return stack
-buf3        dd    4 dup 0       ; Buffer
+buf3        db   32 dup 0       ; Buffer
 lStack      dd   64 dup 0       ; Loop stack
-buf4        dd    4 dup 0       ; Buffer
+buf4        db   32 dup 0       ; Buffer
 
 ; ----------------------------------------------------------------
 THE_ROM:
-xCold       dd xHA, xDot, xHere, xDot, xLast, xDot, xCell, xDot
-                dd xCR, xWords
-                dd xCR, xCR, xNum+10, doFor, doI, doInc, xDot, doNext
-xWarm       dd xInterp, xBench, doJmp, xWarm
-xInterp     dd xOK, xTIB, xTIBSZ, xAccept, doDec, doDec, xTIB, doAdd, xNum, doSwap, doCStore
-                dd xTIB, doDup, doLen, doType, xSpace
+xCold       dd xHA, xDot, xHere, xDot, xLast, xDot, xCell, xDot, doDotS
+                dd xCR, xWords, doDotS, xBench
+                dd xCR, xCR, xNum+10, doFor, doI, doInc, xDot, doNext, doDotS
+                dd xCR, xNum+11, xNum+22, xNum+33, doDotS, doDrop, doDrop, doDrop
+xWarm       dd xInterp, doJmp, xWarm
+xInterp     dd xOK, xTIB, xTIBSZ, xAccept, doDrop ; , xTIB, doAdd, xNum, doSwap, doCStore
+                ; dd xTIB, doDup, doLen, doType, xSpace
                 dd xTIB, xToIn, doStore
+xIntLoop        dd doDotS, nextWd, doJmpZ, xIntExit
+                dd doDup, doLit, buf2, doDup, doLen, doType, xSpace ; *** tmp ***
+                dd doDrop ; *** TODO ***
                 ; LOOP: get the next word. If none left, exit
                 ; search in dict for the word
                 ; if found, compile it (or execute if immediate) and jmp to LOOP
                 ; else if number, push it and jmp to LOOP
                 ; else error/reset and exit
-                dd doExit
+                dd doJmp, xIntLoop
+xIntExit        dd doDrop, doExit
 xDeShow     dd doDup, xDeName                   ; First char of name    ( a1--a2 )
                 dd doDup, doLen, doType         ; Name length
                 dd xDeNext, doExit              ; Next entry
@@ -571,11 +683,11 @@ xDeShowVB   dd xCR, doDup, xDeNext, xDot        ; Next    ( a1--a2 )
                 dd doDup, xDeName               ; First char of name
                 dd doDup, doLen, doType         ; Name length
                 dd xDeNext, doExit              ; Next entry
-xDeNext     dd doFetch, doExit                                     ; dict entry Next  ( de--next )
-xDeXT       dd xCell, doAdd, doFetch, doExit                       ; dict entry XT    ( de--xt )
-xDeFlags    dd x2Cells, doAdd, doCFetch, doExit                    ; dict entry flags ( de--flags )
-xDeLen      dd x2Cells, doAdd, xNum+1, doAdd, doCFetch, doExit     ; dict entry len   ( de--len )
-xDeName     dd x2Cells, doAdd, xNum+2, doAdd, doExit               ; dict entry name  ( de--addr )
+xDeNext     dd xNum+DE_NEXT_OFFSET,  doAdd, doFetch,  doExit      ; dict entry Next  ( de--next )
+xDeXT       dd xNum+DE_XT_OFFSET,    doAdd, doFetch,  doExit      ; dict entry XT    ( de--xt )
+xDeFlags    dd xNum+DE_FLAGS_OFFSET, doAdd, doCFetch, doExit      ; dict entry flags ( de--flags )
+xDeLen      dd xNum+DE_LEN_OFFSET,   doAdd, doCFetch, doExit      ; dict entry len   ( de--len )
+xDeName     dd xNum+DE_NAME_OFFSET,  doAdd, doExit                ; dict entry name  ( de--addr )
 xSpace      dd xNum+32, doEmit, doExit
 xCR         dd xNum+13, doEmit, xNum+10, doEmit, doExit
 xTab        dd xNum+9, doEmit, doExit
