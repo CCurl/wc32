@@ -218,22 +218,53 @@ doCStore: m_pop edx
         mov     BYTE [edx], al
         ret
 
+
+
 ; ******************************************************************************
-; Number input
-num:    sub     al, '0'
-        and     eax, $FF
-        mov     edx, eax
-.l:     mov     al, [esi]
-        mov     bx, '09'
-        call    betw
-        cmp     bl, 0
-        je      .x
+isNum:  cmp     al, '0'
+        jl      .NO
+        cmp     al, '9'
+        jg      .HEX
         sub     al, '0'
-        imul    edx, edx, 10
+        stc
+        ret
+.HEX:   cmp     ecx, 16
+        jne     .NO
+        cmp     al, 'A'
+        jl      .NO
+        cmp     al, 'F'
+        jg      .NO
+        sub     al, 'A'
+        add     al, 10
+        stc
+        ret
+.NO:    clc
+        ret
+
+; ******************************************************************************
+; doNum: ( addr--num 1 | 0 )
+doNum:  getTOS  ebx
+        mov     ecx, 16         ; BASE
+        xor     eax, eax
+        xor     edx, edx
+.LOOP:  mov     al, [ebx]
+        test    al, al
+        jz      .YES
+        call    isNum
+        jnc     .NO
+        imul    edx, ecx
         add     edx, eax
-        inc     esi
-        jmp     .l
-.x:     m_push  edx
+        inc     ebx
+        jmp     .LOOP
+.HEX:   cmp     al, 'A'
+        jl      .NO
+        cmp     al, 'F'
+        jg      .NO
+        jmp     .LOOP
+.NO:    setTOS  0
+        ret
+.YES:   setTOS  edx
+        m_push  1
         ret
 
 ; ******************************************************************************
@@ -569,43 +600,20 @@ nextWd: call    skipWS          ; ( --addr len )
         ret
 
 ; ******************************************************************************
-strCmp:         ; Compare the strings pointed to by EAX and EBX - return CARRY=1 if the same
-                ; NOTE: EDX is destroyed
-.LP:    mov     dl, [eax]
-        mov     dh, [ebx]
-        cmp     dl, dh
-        jne     .NEQ
-        test    dl, dl          ; End of strings?
+doStrCmp:       ; ( str1 str2--fl )
+        m_pop   ecx
+        m_pop   edx
+        m_push  0               ; Default to NOT equal
+.LP:    mov     al, [ecx]
+        cmp     al, [edx]
+        jne     .X
+        test    al, al          ; End of strings?
         jz      .EQ
-        inc     eax
-        inc     ebx
+        inc     ecx
+        inc     edx
         jmp     .LP
-.EQ:    stc
-        ret
-.NEQ:   clc
-        ret
-
-; ******************************************************************************
-dictFind:       ; ( addr--xt fl dp | addr 0 )
-        getTOS  ebx
-        mov     ecx, [LAST]
-.L:     test    ecx, ecx
-        jz      .NF
-        mov     eax, [ecx+DE_NAME_OFFSET]
-        push    ebx
-        call    strCmp
-        pop     ebx
-        jc      .FOUND
-        mov     ecx, [ecx]
-        jmp     .L
-.FOUND: mov     al, [edx+DE_FLAGS_OFFSET]
-        and     eax, 0xFF
-        setTOS  DWORD [edx+DE_XT_OFFSET]   ; XT
-        m_push  eax                        ; FLAGS
-        m_push  ecx                        ; DP - dict entry pointer
-        ret
-.NF:    m_push  ecx
-        ret
+.EQ:    inc     TOS
+.X:     ret
 
 ; ******************************************************************************
 doLit:  lodsd
@@ -663,22 +671,21 @@ xCold       dd xHA, xDot, xHere, xDot, xLast, xDot, xCell, xDot, doDotS
 xWarm       dd xInterp, doJmp, xWarm
 xInterp     dd xOK, xTIB, xTIBSZ, xAccept, doDrop ; , xTIB, doAdd, xNum, doSwap, doCStore
                 ; dd xTIB, doDup, doLen, doType, xSpace
-                dd xTIB, xToIn, doStore
-xIntLoop        dd doDotS, nextWd, doJmpZ, xIntExit
-                dd doDup, doLit, buf2, doDup, doLen, doType, xSpace ; *** tmp ***
-                dd doDrop ; *** TODO ***
-                ; LOOP: get the next word. If none left, exit
-                ; search in dict for the word
-                ; if found, compile it (or execute if immediate) and jmp to LOOP
-                ; else if number, push it and jmp to LOOP
-                ; else error/reset and exit
+                dd xTIB, xToIn, doStore, doDotS
+xIntLoop        dd nextWd, doJmpNZ, xIntWd, doDrop, doExit              ; Get next word, exit if no more words
+xIntWd          dd doDup, doLit, buf2, doDup, doLen, doType, xSpace     ; *** temp ***
+                dd doNum, doJmpZ, xIntDictQ                             ; Is it a number?
+                dd xNum+'n', doEmit, doDot, xNum+'n', doEmit            ; Yes, it is a number, TODO
+                dd doJmp, xIntLoop                                      ; End of Number logic
+xIntDictQ       dd xFind, doJmpZ, xIntERR                               ; Is it in the dictionary?
+                dd xNum+'F', doEmit, xDot, xDot                         ; Yes, TODO
                 dd doJmp, xIntLoop
-xIntExit        dd doDrop, doExit
+xIntERR         dd xNum+'?', xNum+'?', doEmit, doEmit, doExit
 xDeShow     dd doDup, xDeName                   ; First char of name    ( a1--a2 )
                 dd doDup, doLen, doType         ; Name length
                 dd xDeNext, doExit              ; Next entry
 xDeShowVB   dd xCR, doDup, xDeNext, xDot        ; Next    ( a1--a2 )
-                dd doDup, xDeXT, xDot           ; XT
+                dd doDup, xDeXT,    xDot        ; XT
                 dd doDup, xDeFlags, xDot        ; Flags
                 dd doDup, xDeName               ; First char of name
                 dd doDup, doLen, doType         ; Name length
@@ -698,12 +705,18 @@ xLast       dd xLA, doFetch, doExit
 xDot        dd doDot, xSpace, doExit
 xCell       dd xNum+CELL_SZ, doExit
 xCells      dd xCell, doMult, doExit
-x2Cells     dd xNum+2, xCells, doExit
 xOK         dd doLit, okStr, xNum+3, doType, xCR, doExit
 xTIB        dd doLit, TIB, doExit
 xTIBSZ      dd xNum+TIB_SZ, doExit
 xToIn       dd doLit, ToIn, doExit
 xAccept     dd doReadL, doExit
+xFind      dd xLast                                                 ; ( str--xt fl 1 | 0 )
+xFindLoop       dd doOver, doOver, xDeName
+                dd doStrCmp, doJmpZ, xFindNext
+                dd doSwap, doDrop, doDup, xDeXT, doSwap, xDeFlags   ; FOUND!
+                dd xNum+1, doExit
+xFindNext       dd xDeNext, doDup, doJmpNZ, xFindLoop
+                dd doDrop, doDrop, xNum, doExit                     ; NOT Found!
 xWords      dd xLast
 xWdsLoop        dd xDeShowVB, xTab, doDup, doJmpNZ, xWdsLoop
                 dd doDrop, doExit
@@ -737,8 +750,10 @@ THE_DICT:
         addDict doLen,    0, 5, "S-LEN", tag0160
         addDict doKey,    0, 3, "KEY",   tag0170
         addDict doQKey,   0, 4, "QKEY",  tag0180
-        addDict doDup,    0, 3, "DUP",   tagLast
+        addDict doDot,    0, 3, "(.)",   tag0190
+        addDict xDot,     0, 1, ".",     tag0191
 ; TODO add more built-in dictionary entries here
+        addDict doDup,    0, 3, "DUP",   tagLast
         rb  DICT_SZ
 DICT_END:
 
