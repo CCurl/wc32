@@ -3,9 +3,6 @@
 ; FOR_OS equ WINDOWS
 ; FOR_OS equ LINUX
 
-; A dictionary entry looks like this:
-; Next/4, XT/4, Flags/1, Len/1, Name/?, NULL/1
-
 match =WINDOWS, FOR_OS {
         format PE console
         include 'win32ax.inc'
@@ -31,30 +28,38 @@ REG3 equ ecx         ; Free register #3
 REG4 equ edx         ; Free register #4
 
 CELL_SZ = 4
-CODE_SZ = 64*1024
-DICT_SZ = 64*1024
-VARS_SZ = 64*1024
+CODE_SZ =  64*1024
+DICT_SZ =  64*1024
+VARS_SZ = 256*1024
 TIB_SZ  = 128
 xNum    = $70000000
 xMask   = $0FFFFFFF
 LastTag equ 0
 
+; A dictionary entry looks like this:
+; Next/4, XT/4, Flags/1, Len/1, Name/?, NULL/1
+DE_NEXT_OFFSET  = (0)
+DE_XT_OFFSET    = (CELL_SZ)
+DE_FLAGS_OFFSET = (CELL_SZ*2)
+DE_LEN_OFFSET   = (CELL_SZ*2)+1
+DE_NAME_OFFSET  = (CELL_SZ*2)+2
+
 ; ******************************************************************************
 ; MACROS
-macro m_getTOS val { mov val, TOS }
-macro m_setTOS val { mov TOS, val }
-macro m_get2ND val { mov val, [STKP] }
-macro m_set2ND val { mov [STKP], val }
+macro getTOS val { mov val, TOS }
+macro setTOS val { mov TOS, val }
+macro get2ND val { mov val, [STKP] }
+macro set2ND val { mov [STKP], val }
 
 macro m_push val {
        add STKP, CELL_SZ
        mov [STKP], TOS
-       m_setTOS val
+       setTOS val
 }
 
 ; ******************************************************************************
 macro m_pop val {
-       m_getTOS val
+       getTOS val
        mov TOS, [STKP]
        sub STKP, CELL_SZ
 }
@@ -62,10 +67,10 @@ macro m_pop val {
 ; ******************************************************************************
 macro addDict XT, Flags, Len, Name, Tag {
     align CELL_SZ
-    d_#Tag: dd LastTag
+    Tag: dd LastTag
             dd XT
             db Flags, Len, Name, 0
-    LastTag equ d_#Tag
+    LastTag equ Tag
 }
 
 ; ******************************************************************************
@@ -91,7 +96,6 @@ warm:   mov     eax, rStack
         mov     esi, THE_ROM
         cld
         jmp     wcRun
-        call    doBye
         ret
 
 ; ******************************************************************************
@@ -186,21 +190,21 @@ doJmpZ: m_pop  ebx
 
 ; ******************************************************************************
 doJmpNZ: m_pop  ebx
-        lodsd
-        test    ebx, ebx
-        jnz     doJ
-        ret
+         lodsd
+         test   ebx, ebx
+         jnz    doJ
+         ret
 
 ; ******************************************************************************
-doFetch: m_getTOS   edx
-        m_setTOS    [edx]
-        ret
+doFetch: getTOS   edx
+         setTOS   [edx]
+         ret
 
 ; ******************************************************************************
 doStore: m_pop  edx
-        m_pop   eax
-        mov     [edx], eax
-        ret
+         m_pop  eax
+         mov    [edx], eax
+         ret
 
 ; ******************************************************************************
 doCFetch: xor     eax, eax
@@ -214,22 +218,53 @@ doCStore: m_pop edx
         mov     BYTE [edx], al
         ret
 
+
+
 ; ******************************************************************************
-; Number input
-num:    sub     al, '0'
-        and     eax, $FF
-        mov     edx, eax
-.l:     mov     al, [esi]
-        mov     bx, '09'
-        call    betw
-        cmp     bl, 0
-        je      .x
+isNum:  cmp     al, '0'
+        jl      .NO
+        cmp     al, '9'
+        jg      .HEX
         sub     al, '0'
-        imul    edx, edx, 10
+        stc
+        ret
+.HEX:   cmp     ecx, 16
+        jne     .NO
+        cmp     al, 'A'
+        jl      .NO
+        cmp     al, 'F'
+        jg      .NO
+        sub     al, 'A'
+        add     al, 10
+        stc
+        ret
+.NO:    clc
+        ret
+
+; ******************************************************************************
+; doNum: ( addr--num 1 | 0 )
+doNum:  getTOS  ebx
+        mov     ecx, 16         ; BASE
+        xor     eax, eax
+        xor     edx, edx
+.LOOP:  mov     al, [ebx]
+        test    al, al
+        jz      .YES
+        call    isNum
+        jnc     .NO
+        imul    edx, ecx
         add     edx, eax
-        inc     esi
-        jmp     .l
-.x:     m_push  edx
+        inc     ebx
+        jmp     .LOOP
+.HEX:   cmp     al, 'A'
+        jl      .NO
+        cmp     al, 'F'
+        jg      .NO
+        jmp     .LOOP
+.NO:    setTOS  0
+        ret
+.YES:   setTOS  edx
+        m_push  1
         ret
 
 ; ******************************************************************************
@@ -291,9 +326,11 @@ match =WINDOWS, FOR_OS {
                  m_push  eax
                  ret
         ; **********************************************************************
-        doEmit: m_pop   eax
+        doEmit: push    eax
+                m_pop   eax
                 mov     [buf1], al
                 invoke  WriteConsole, [hStdOut], buf1, 1, NULL, NULL
+                pop     eax
                 ret
         ; **********************************************************************
         doType: m_pop   eax              ; Len ( addr len-- )
@@ -303,8 +340,13 @@ match =WINDOWS, FOR_OS {
         ; **********************************************************************
         doReadL: m_pop  edx              ; buffer size
                  m_pop  ecx              ; buffer
+                 push   ecx
                  invoke ReadConsole, [hStdIn], ecx, edx, bytesRead, 0
+                 pop    ecx
                  mov    eax, [bytesRead]
+                 dec    eax             ; Remove the <LF>
+                 dec    eax             ; Remove the <CR>
+                 mov    [ecx+eax], BYTE 0
                  m_push eax
                  ret
         ; **********************************************************************
@@ -326,13 +368,15 @@ match =LINUX, FOR_OS {
                 m_push  eax
                 ret
         ; **********************************************************************
-        doEmit: m_pop   eax             ; ( ch-- )
+        doEmit: push    eax
+                m_pop   eax             ; ( ch-- )
                 mov     [buf1], al      ; put char in message
                 mov     eax,4           ; system call number (sys_write)
                 mov     ebx,1           ; file descriptor (stdout)
                 mov     ecx,buf1        ; message to write
                 mov     edx,1           ; message length
                 int     0x80            ; call kernel
+                pop     eax
                 ret
         ; **********************************************************************
         doType: m_pop   edx             ; Len ( string len-- )
@@ -346,8 +390,12 @@ match =LINUX, FOR_OS {
                  m_pop  ecx             ; buffer
                  mov    ebx, 0          ; stdin
                  mov    eax, 3          ; sys_read
+                 push   ecx
                  int    0x80
+                 pop    ecx
+                 dec    eax             ; Remove the <LF>
                  m_push eax
+                 mov    [ecx+eax], BYTE 0
                 ret
         ; **********************************************************************
         doQKey: ; invoke LinuxKey
@@ -467,17 +515,36 @@ doDot:  push    eax
         ret
 
 ; ******************************************************************************
-doDup:  m_push  TOS
+doDotS: m_push  '('
+        call    doEmit
+        mov     eax, dStack+CELL_SZ
+.L:     cmp     eax, STKP
+        jg      .X
+        m_push  [eax]
+        call    doDot
+        m_push  32
+        call    doEmit
+        add     eax, CELL_SZ
+        jmp     .L
+.X:     call    doDup
+        call    doDot
+        m_push  ')'
+        call    doEmit
         ret
 
 ; ******************************************************************************
-doSwap: m_get2ND    eax
-        m_set2ND    TOS
-        m_setTOS    eax
+doDup:  getTOS  eax
+        m_push  eax
         ret
 
 ; ******************************************************************************
-doOver: m_get2ND    eax
+doSwap: get2ND    eax
+        set2ND    TOS
+        setTOS    eax
+        ret
+
+; ******************************************************************************
+doOver: get2ND      eax
         m_push      eax
         ret
 
@@ -499,6 +566,54 @@ doLen:  m_pop   edx             ; ( addr--len )
         jmp     .L
 .X:     m_push  ecx
         ret
+
+; ******************************************************************************
+skipWS: mov     edx, [ToIn]     ; Updates ToIn to point to the next non-whitespace char
+        xor     eax, eax
+.L:     mov     al, [edx]
+        cmp     al, 32
+        jg      .X
+        test    al, al
+        jz      .X
+        inc     edx
+        jmp     .L
+.X:     mov     [ToIn], edx
+        ret
+
+
+; ******************************************************************************
+nextWd: call    skipWS          ; ( --addr len )
+        mov     ebx, buf2
+        m_push  ebx
+        m_push  0
+.L:     mov     al, [edx]
+        cmp     al, 32
+        jle     .X
+        mov     [ebx], al
+        inc     edx
+        inc     ebx
+        inc     TOS
+        cmp     TOS, 31
+        jl      .L
+.X:     mov     [ToIn], edx
+        mov     [ebx], BYTE 0
+        ret
+
+; ******************************************************************************
+doStrCmp:       ; ( str1 str2--fl )
+        m_pop   ecx
+        m_pop   edx
+        m_push  0               ; Default to NOT equal
+.LP:    mov     al, [ecx]
+        cmp     al, [edx]
+        jne     .X
+        test    al, al          ; End of strings?
+        jz      .EQ
+        inc     ecx
+        inc     edx
+        jmp     .LP
+.EQ:    inc     TOS
+.X:     ret
 
 ; ******************************************************************************
 doLit:  lodsd
@@ -534,47 +649,52 @@ rStackPtr   dd  rStack
 lStackPtr   dd  lStack
 HERE        dd  THE_CODE
 VHERE       dd  THE_VARS
-LAST        dd  d_tg999999
+LAST        dd  tagLast
 HERE1       dd  ?
-TIB         dd  TIB_SZ dup 0       ; TIB
+TIB         dd  TIB_SZ dup 0
+ToIn        dd  ?
 
-buf1        db   16 dup 0       ; Buffer
+buf1        db   32 dup 0       ; Buffer (used for EMIT)
 dStack      dd   64 dup 0       ; Data stack
-buf2        dd    4 dup 0       ; Buffer
+buf2        db   32 dup 0       ; Buffer (used for nextWd)
 rStack      dd   64 dup 0       ; Return stack
-buf3        dd    4 dup 0       ; Buffer
+buf3        db   32 dup 0       ; Buffer
 lStack      dd   64 dup 0       ; Loop stack
-buf4        dd    4 dup 0       ; Buffer
+buf4        db   32 dup 0       ; Buffer
 
 ; ----------------------------------------------------------------
 THE_ROM:
-xCold       dd xHA, xDot, xHere, xDot, xLast, xDot, xCell, xDot
-                dd xCR, xWords
-                dd xCR, xCR, xNum+10, doFor, doI, doInc, xDot, doNext
-xWarm       dd xInterp, xBench, doJmp, xWarm
-xInterp     dd xOK, xTIB, xTIBSZ, xAccept, doDec, doDec, xTIB, doAdd, xNum, doSwap, doCStore
-                dd xTIB, doDup, doLen, doType, xSpace
-                ; Set >IN to TIB
-                ; LOOP: get the next word. If none left, exit
-                ; search in dict for the word
-                ; if found, compile it (or execute if immediate) and jmp to LOOP
-                ; else if number, push it and jmp to LOOP
-                ; else error/reset and exit
-                dd doExit
+xCold       dd xHA, xDot, xHere, xDot, xLast, xDot, xCell, xDot, doDotS
+                dd xCR, xWords, doDotS, xBench
+                dd xCR, xCR, xNum+10, doFor, doI, doInc, xDot, doNext, doDotS
+                dd xCR, xNum+11, xNum+22, xNum+33, doDotS, doDrop, doDrop, doDrop
+xWarm       dd xInterp, doJmp, xWarm
+xInterp     dd xOK, xTIB, xTIBSZ, xAccept, doDrop ; , xTIB, doAdd, xNum, doSwap, doCStore
+                ; dd xTIB, doDup, doLen, doType, xSpace
+                dd xTIB, xToIn, doStore, doDotS
+xIntLoop        dd nextWd, doJmpNZ, xIntWd, doDrop, doExit              ; Get next word, exit if no more words
+xIntWd          dd doDup, doLit, buf2, doDup, doLen, doType, xSpace     ; *** temp ***
+                dd doNum, doJmpZ, xIntDictQ                             ; Is it a number?
+                dd xNum+'n', doEmit, doDot, xNum+'n', doEmit            ; Yes, it is a number, TODO
+                dd doJmp, xIntLoop                                      ; End of Number logic
+xIntDictQ       dd xFind, doJmpZ, xIntERR                               ; Is it in the dictionary?
+                dd xNum+'F', doEmit, xDot, xDot                         ; Yes, TODO
+                dd doJmp, xIntLoop
+xIntERR         dd xNum+'?', xNum+'?', doEmit, doEmit, doExit
 xDeShow     dd doDup, xDeName                   ; First char of name    ( a1--a2 )
                 dd doDup, doLen, doType         ; Name length
                 dd xDeNext, doExit              ; Next entry
 xDeShowVB   dd xCR, doDup, xDeNext, xDot        ; Next    ( a1--a2 )
-                dd doDup, xDeXT, xDot           ; XT
+                dd doDup, xDeXT,    xDot        ; XT
                 dd doDup, xDeFlags, xDot        ; Flags
                 dd doDup, xDeName               ; First char of name
                 dd doDup, doLen, doType         ; Name length
                 dd xDeNext, doExit              ; Next entry
-xDeNext     dd doFetch, doExit                                     ; dict entry Next  ( de--next )
-xDeXT       dd xCell, doAdd, doFetch, doExit                       ; dict entry XT    ( de--xt )
-xDeFlags    dd x2Cells, doAdd, doCFetch, doExit                    ; dict entry flags ( de--flags )
-xDeLen      dd x2Cells, doAdd, xNum+1, doAdd, doCFetch, doExit     ; dict entry len   ( de--len )
-xDeName     dd x2Cells, doAdd, xNum+2, doAdd, doExit               ; dict entry name  ( de--addr )
+xDeNext     dd xNum+DE_NEXT_OFFSET,  doAdd, doFetch,  doExit      ; dict entry Next  ( de--next )
+xDeXT       dd xNum+DE_XT_OFFSET,    doAdd, doFetch,  doExit      ; dict entry XT    ( de--xt )
+xDeFlags    dd xNum+DE_FLAGS_OFFSET, doAdd, doCFetch, doExit      ; dict entry flags ( de--flags )
+xDeLen      dd xNum+DE_LEN_OFFSET,   doAdd, doCFetch, doExit      ; dict entry len   ( de--len )
+xDeName     dd xNum+DE_NAME_OFFSET,  doAdd, doExit                ; dict entry name  ( de--addr )
 xSpace      dd xNum+32, doEmit, doExit
 xCR         dd xNum+13, doEmit, xNum+10, doEmit, doExit
 xTab        dd xNum+9, doEmit, doExit
@@ -585,11 +705,18 @@ xLast       dd xLA, doFetch, doExit
 xDot        dd doDot, xSpace, doExit
 xCell       dd xNum+CELL_SZ, doExit
 xCells      dd xCell, doMult, doExit
-x2Cells     dd xNum+2, xCells, doExit
 xOK         dd doLit, okStr, xNum+3, doType, xCR, doExit
 xTIB        dd doLit, TIB, doExit
 xTIBSZ      dd xNum+TIB_SZ, doExit
+xToIn       dd doLit, ToIn, doExit
 xAccept     dd doReadL, doExit
+xFind      dd xLast                                                 ; ( str--xt fl 1 | 0 )
+xFindLoop       dd doOver, doOver, xDeName
+                dd doStrCmp, doJmpZ, xFindNext
+                dd doSwap, doDrop, doDup, xDeXT, doSwap, xDeFlags   ; FOUND!
+                dd xNum+1, doExit
+xFindNext       dd xDeNext, doDup, doJmpNZ, xFindLoop
+                dd doDrop, doDrop, xNum, doExit                     ; NOT Found!
 xWords      dd xLast
 xWdsLoop        dd xDeShowVB, xTab, doDup, doJmpNZ, xWdsLoop
                 dd doDrop, doExit
@@ -598,29 +725,35 @@ xBench      dd doTimer, doLit, 500000000, doDup, xDot, doFor, doNext
 
 ; ----------------------------------------------------------------
 THE_DICT:
-        addDict doBye,    0, 3, "BYE",   tg000000
-        addDict doInc,    0, 2, "1+",    tg200000
-        addDict doDec,    0, 2, "1-",    tg200100
-        addDict doFetch,  0, 1, "@",     tg200200
-        addDict doFor,    0, 3, "FOR",   tg200300
-        addDict doI,      0, 1, "I",     tg200400
-        addDict doNext,   0, 4, "NEXT",  tg200500
-        addDict xTIB,     0, 3, "TIB",   tg200600
-        addDict xTab,     0, 3, "TAB",   tg200700
-        addDict xCR,      0, 2, "CR",    tg200800
-        addDict xWords,   0, 5, "WORDS", tg200900
-        addDict xCell,    0, 4, "CELL",  tg201000
-        addDict xCells,   0, 4, "CELLS", tg201001
-        addDict doItoA,   0, 3, "I>A",   tg201100
-        addDict xHere,    0, 4, "HERE",  tg201200
-        addDict xHA,      0, 2, "HA",    tg201300
-        addDict xLast,    0, 4, "LAST",  tg201400
-        addDict xLA,      0, 2, "LA",    tg201500
-        addDict doLen,    0, 5, "S-LEN", tg201600
-        addDict doKey,    0, 3, "KEY",   tg201700
-        addDict doQKey,   0, 4, "QKEY",  tg201800
-        addDict doDup,    0, 3, "DUP",   tg999999
+        addDict doBye,    0, 3, "BYE",   tag0000
+        addDict doInc,    0, 2, "1+",    tag0010
+        addDict doDec,    0, 2, "1-",    tag0011
+        addDict doFetch,  0, 1, "@",     tag0020
+        addDict doStore,  0, 1, "!",     tag0021
+        addDict doCFetch, 0, 2, "C@",    tag0022
+        addDict doCStore, 0, 2, "C!",    tag0023
+        addDict doFor,    0, 3, "FOR",   tag0030
+        addDict doI,      0, 1, "I",     tag0031
+        addDict doNext,   0, 4, "NEXT",  tag0032
+        addDict xTIB,     0, 3, "TIB",   tag0060
+        addDict xToIn,    0, 3, ">IN",   tag0061
+        addDict xTab,     0, 3, "TAB",   tag0070
+        addDict xCR,      0, 2, "CR",    tag0080
+        addDict xWords,   0, 5, "WORDS", tag0090
+        addDict xCell,    0, 4, "CELL",  tag0100
+        addDict xCells,   0, 4, "CELLS", tag0101
+        addDict doItoA,   0, 3, "I>A",   tag0110
+        addDict xHere,    0, 4, "HERE",  tag0120
+        addDict xHA,      0, 2, "HA",    tag0130
+        addDict xLast,    0, 4, "LAST",  tag0140
+        addDict xLA,      0, 2, "LA",    tag0150
+        addDict doLen,    0, 5, "S-LEN", tag0160
+        addDict doKey,    0, 3, "KEY",   tag0170
+        addDict doQKey,   0, 4, "QKEY",  tag0180
+        addDict doDot,    0, 3, "(.)",   tag0190
+        addDict xDot,     0, 1, ".",     tag0191
 ; TODO add more built-in dictionary entries here
+        addDict doDup,    0, 3, "DUP",   tagLast
         rb  DICT_SZ
 DICT_END:
 
