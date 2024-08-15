@@ -17,7 +17,6 @@ match =LINUX, FOR_OS {
 ; ******************************************************************************
 ; Defines
 
-
 TOS  equ edi         ; Top-Of-Stack
 PCIP equ esi         ; Program-Counter/Instruction-Pointer
 STKP equ ebp         ; Stack-Pointer
@@ -68,8 +67,10 @@ macro m_pop val {
 macro addDict XT, Flags, Len, Name, Tag {
     align CELL_SZ
     Tag: dd LastTag
-            dd XT
-            db Flags, Len, Name, 0
+         dd XT
+         db Flags
+         db Len
+         db Name, 0
     LastTag equ Tag
 }
 
@@ -77,13 +78,7 @@ macro addDict XT, Flags, Len, Name, Tag {
 ; ******************************************************************************
 ; ******************************************************************************
 entry $
-match =WINDOWS, FOR_OS {
-        invoke GetStdHandle, STD_INPUT_HANDLE
-        mov    [hStdIn], eax
-        
-        invoke GetStdHandle, STD_OUTPUT_HANDLE
-        mov    [hStdOut], eax
-}
+main:   call    getHandles
         mov     ebx, THE_CODE
         mov     [HERE], ebx
         mov     ebx, THE_VARS
@@ -221,12 +216,13 @@ doCStore: m_pop edx
 
 
 ; ******************************************************************************
-isNum:  cmp     al, '0'
+isDigit: ; Carry set means al is a digit, clear means al is NOT a digit
+        cmp     al, '0'
         jl      .NO
         cmp     al, '9'
         jg      .HEX
         sub     al, '0'
-        stc
+        stc     ; It IS a digit
         ret
 .HEX:   cmp     ecx, 16
         jne     .NO
@@ -236,30 +232,25 @@ isNum:  cmp     al, '0'
         jg      .NO
         sub     al, 'A'
         add     al, 10
-        stc
+        stc     ; It is a digit
         ret
-.NO:    clc
+.NO:    clc     ; It is NOT a digit
         ret
 
 ; ******************************************************************************
-; doNum: ( addr--num 1 | 0 )
-doNum:  getTOS  ebx
-        mov     ecx, 16         ; BASE
+doNumQ: ; ( addr--num 1 | 0 )
+        getTOS  ebx
+        mov     ecx, [BASE]
         xor     eax, eax
         xor     edx, edx
 .LOOP:  mov     al, [ebx]
         test    al, al
         jz      .YES
-        call    isNum
+        call    isDigit
         jnc     .NO
         imul    edx, ecx
         add     edx, eax
         inc     ebx
-        jmp     .LOOP
-.HEX:   cmp     al, 'A'
-        jl      .NO
-        cmp     al, 'F'
-        jg      .NO
         jmp     .LOOP
 .NO:    setTOS  0
         ret
@@ -318,93 +309,8 @@ doUnloop:
         ret
 
 ; ******************************************************************************
-match =WINDOWS, FOR_OS {
-        doBye:  invoke  ExitProcess, 0
-                ret
-        ; **********************************************************************
-        doTimer: invoke GetTickCount
-                 m_push  eax
-                 ret
-        ; **********************************************************************
-        doEmit: push    eax
-                m_pop   eax
-                mov     [buf1], al
-                invoke  WriteConsole, [hStdOut], buf1, 1, NULL, NULL
-                pop     eax
-                ret
-        ; **********************************************************************
-        doType: m_pop   eax              ; Len ( addr len-- )
-                m_pop   ebx              ; Addr
-                invoke  WriteConsole, [hStdOut], ebx, eax, NULL, NULL
-                ret
-        ; **********************************************************************
-        doReadL: m_pop  edx              ; buffer size
-                 m_pop  ecx              ; buffer
-                 push   ecx
-                 invoke ReadConsole, [hStdIn], ecx, edx, bytesRead, 0
-                 pop    ecx
-                 mov    eax, [bytesRead]
-                 dec    eax             ; Remove the <LF>
-                 dec    eax             ; Remove the <CR>
-                 mov    [ecx+eax], BYTE 0
-                 m_push eax
-                 ret
-        ; **********************************************************************
-        doQKey: invoke _kbhit
-                m_push  eax
-                ret
-        ; **********************************************************************
-        doKey:  invoke  _getch
-                m_push  eax
-                ret
-}
-
-; ******************************************************************************
-match =LINUX, FOR_OS {
-        doBye:  ; invoke  LinuxExit, 0
-                ret
-        ; **********************************************************************
-        doTimer: ; invoke LinuxTimer
-                m_push  eax
-                ret
-        ; **********************************************************************
-        doEmit: push    eax
-                m_pop   eax             ; ( ch-- )
-                mov     [buf1], al      ; put char in message
-                mov     eax,4           ; system call number (sys_write)
-                mov     ebx,1           ; file descriptor (stdout)
-                mov     ecx,buf1        ; message to write
-                mov     edx,1           ; message length
-                int     0x80            ; call kernel
-                pop     eax
-                ret
-        ; **********************************************************************
-        doType: m_pop   edx             ; Len ( string len-- )
-                m_pop   ecx             ; String
-                mov     eax,4           ; system call number (sys_write)
-                mov     ebx,1           ; file descriptor (stdout)
-                int     0x80
-                ret
-        ; **********************************************************************
-        doReadL: m_pop edx              ; buffer size ( buf sz--num )
-                 m_pop  ecx             ; buffer
-                 mov    ebx, 0          ; stdin
-                 mov    eax, 3          ; sys_read
-                 push   ecx
-                 int    0x80
-                 pop    ecx
-                 dec    eax             ; Remove the <LF>
-                 m_push eax
-                 mov    [ecx+eax], BYTE 0
-                ret
-        ; **********************************************************************
-        doQKey: ; invoke LinuxKey
-                m_push  DWORD 0
-                ret
-        doKey: ; invoke LinuxQKey
-                m_push  DWORD 0
-                ret
-}
+match =WINDOWS, FOR_OS { include 'io-win.asm' }
+match =LINUX,   FOR_OS { include 'io-lin.asm' }
 
 ; ******************************************************************************
 doMult: m_pop   eax
@@ -516,14 +422,14 @@ doDot:  push    eax
 
 ; ******************************************************************************
 doDotS: m_push  '('
-        call    doEmit
+        call    printChar
         mov     eax, dStack+CELL_SZ
 .L:     cmp     eax, STKP
         jg      .X
         m_push  [eax]
         call    doDot
         m_push  32
-        call    doEmit
+        call    printChar
         add     eax, CELL_SZ
         jmp     .L
 .X:     call    doDup
@@ -621,6 +527,24 @@ doLit:  lodsd
         ret
 
 ; ******************************************************************************
+doComma: ; ( n-- )
+        m_pop   eax
+        mov     edx, [HERE]
+        mov     [edx], eax
+        add     edx, CELL_SZ
+        mov     [HERE], edx
+        ret
+
+; ******************************************************************************
+doCComma: ; ( n-- )
+        m_pop   eax
+        mov     edx, [HERE]
+        mov     [edx], al
+        inc     edx
+        mov     [HERE], edx
+        ret
+
+; ******************************************************************************
 ; ******************************************************************************
 ; ******************************************************************************
 primEnd:
@@ -650,6 +574,7 @@ lStackPtr   dd  lStack
 HERE        dd  THE_CODE
 VHERE       dd  THE_VARS
 LAST        dd  tagLast
+BASE        dd  16
 HERE1       dd  ?
 TIB         dd  TIB_SZ dup 0
 ToIn        dd  ?
@@ -671,16 +596,21 @@ xCold       dd xHA, xDot, xHere, xDot, xLast, xDot, xCell, xDot, doDotS
 xWarm       dd xInterp, doJmp, xWarm
 xInterp     dd xOK, xTIB, xTIBSZ, xAccept, doDrop ; , xTIB, doAdd, xNum, doSwap, doCStore
                 ; dd xTIB, doDup, doLen, doType, xSpace
-                dd xTIB, xToIn, doStore, doDotS
-xIntLoop        dd nextWd, doJmpNZ, xIntWd, doDrop, doExit              ; Get next word, exit if no more words
-xIntWd          dd doDup, doLit, buf2, doDup, doLen, doType, xSpace     ; *** temp ***
-                dd doNum, doJmpZ, xIntDictQ                             ; Is it a number?
-                dd xNum+'n', doEmit, doDot, xNum+'n', doEmit            ; Yes, it is a number, TODO
+                dd xTIB, xToIn, doStore, doDotS, xHere, xDot
+xIntLoop        dd nextWd, doJmpNZ, xIntNumQ, doDrop, doExit            ; Get next word, exit if no more words
+xIntNumQ        dd doDup, doLit, buf2, doDup, doLen, doType, xSpace     ; *** temp ***
+                dd doNumQ, doJmpZ, xIntDictQ                            ; Is it a number?
+                dd doDup, xNum+'n', doEmit, doDot, xNum+'n', doEmit     ; Yes, it is a number, TODO
+                dd xCompNum                                             ; Yes, it is a number
                 dd doJmp, xIntLoop                                      ; End of Number logic
 xIntDictQ       dd xFind, doJmpZ, xIntERR                               ; Is it in the dictionary?
-                dd xNum+'F', doEmit, xDot, xDot                         ; Yes, TODO
+                dd xDot, doDot, xNum+'!', doEmit                        ; Yes, TODO
                 dd doJmp, xIntLoop
 xIntERR         dd xNum+'?', xNum+'?', doEmit, doEmit, doExit
+xExecute    dd doExit
+xCompNum    dd doDup, doLit, 0x80000000, doAnd, doJmpNZ, xCompLit
+                dd doLit, xNum, doOr, doComma, doExit
+xCompLit        dd doLit, doLit, doComma, doComma, doExit
 xDeShow     dd doDup, xDeName                   ; First char of name    ( a1--a2 )
                 dd doDup, doLen, doType         ; Name length
                 dd xDeNext, doExit              ; Next entry
@@ -764,3 +694,5 @@ CODE_END:
 ; ----------------------------------------------------------------
 THE_VARS    rb VARS_SZ
 VARS_END:
+
+; ----------------------------------------------------------------
