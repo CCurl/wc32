@@ -31,8 +31,8 @@ CODE_SZ =  64*1024
 DICT_SZ =  64*1024
 VARS_SZ = 256*1024
 TIB_SZ  = 128
-xNum    = $70000000
-xMask   = $0FFFFFFF
+xNum    = 0x70000000
+numMask = 0x0FFFFFFF
 LastTag equ 0
 
 ; A dictionary entry looks like this:
@@ -64,7 +64,7 @@ macro m_pop val {
 }
 
 ; ******************************************************************************
-macro addDict XT, Flags, Len, Name, Tag {
+macro dictEntry XT, Flags, Len, Name, Tag {
     align CELL_SZ
     Tag: dd LastTag
          dd XT
@@ -107,7 +107,7 @@ wcRun:  lodsd
         mov     [edx], esi
         mov     esi, eax
         jmp     wcRun
-.NUM:   and     eax, xMask
+.NUM:   and     eax, numMask
         m_push  eax
         jmp     wcRun
 
@@ -506,12 +506,40 @@ nextWd: call    skipWS          ; ( --addr len )
         ret
 
 ; ******************************************************************************
-doStrCmp:       ; ( str1 str2--fl )
+doStrEq:       ; ( str1 str2--fl )
         m_pop   ecx
         m_pop   edx
         m_push  0               ; Default to NOT equal
 .LP:    mov     al, [ecx]
         cmp     al, [edx]
+        jne     .X
+        test    al, al          ; End of strings?
+        jz      .EQ
+        inc     ecx
+        inc     edx
+        jmp     .LP
+.EQ:    inc     TOS
+.X:     ret
+
+; ******************************************************************************
+toLower: cmp    al, 'A'
+         jl     .X
+         cmp    al, 'Z'
+         jg     .X
+         add    al, 32
+.X:      ret
+
+; ******************************************************************************
+doStrEqI:      ; ( str1 str2--fl )
+        m_pop   ecx
+        m_pop   edx
+        m_push  0               ; Default to NOT equal
+.LP:    mov     al, [ecx]
+        call    toLower
+        mov     ah, al
+        mov     al, [edx]
+        call    toLower
+        cmp     al, ah
         jne     .X
         test    al, al          ; End of strings?
         jz      .EQ
@@ -598,13 +626,12 @@ xInterp     dd xOK, xTIB, xTIBSZ, xAccept, doDrop ; , xTIB, doAdd, xNum, doSwap,
                 ; dd xTIB, doDup, doLen, doType, xSpace
                 dd xTIB, xToIn, doStore, doDotS, xHere, xDot
 xIntLoop        dd nextWd, doJmpNZ, xIntNumQ, doDrop, doExit            ; Get next word, exit if no more words
-xIntNumQ        dd doDup, doLit, buf2, doDup, doLen, doType, xSpace     ; *** temp ***
-                dd doNumQ, doJmpZ, xIntDictQ                            ; Is it a number?
-                dd doDup, xNum+'n', doEmit, doDot, xNum+'n', doEmit     ; Yes, it is a number, TODO
-                dd xCompNum                                             ; Yes, it is a number
-                dd doJmp, xIntLoop                                      ; End of Number logic
+xIntNumQ        dd doLit, buf2, doDup, doLen, doType, xSpace            ; *** temp ***
+                dd doDup, doNumQ, doJmpZ, xIntDictQ                     ; Is it a number?
+                dd doDup, xNum+'n', doEmit, doDot, xNum+'n', doEmit     ; *** temp - yes, it is a number! ***
+                dd xCompNum, doJmp, xIntLoop                            ; Yes, it is a number
 xIntDictQ       dd xFind, doJmpZ, xIntERR                               ; Is it in the dictionary?
-                dd xDot, doDot, xNum+'!', doEmit                        ; Yes, TODO
+                dd xDot, doDot, xNum+'!', doEmit                        ; *** temp - yes! ***
                 dd doJmp, xIntLoop
 xIntERR         dd xNum+'?', xNum+'?', doEmit, doEmit, doExit
 xExecute    dd doExit
@@ -642,48 +669,50 @@ xToIn       dd doLit, ToIn, doExit
 xAccept     dd doReadL, doExit
 xFind      dd xLast                                                 ; ( str--xt fl 1 | 0 )
 xFindLoop       dd doOver, doOver, xDeName
-                dd doStrCmp, doJmpZ, xFindNext
+                dd doStrEqI, doJmpZ, xFindNext
                 dd doSwap, doDrop, doDup, xDeXT, doSwap, xDeFlags   ; FOUND!
                 dd xNum+1, doExit
 xFindNext       dd xDeNext, doDup, doJmpNZ, xFindLoop
                 dd doDrop, doDrop, xNum, doExit                     ; NOT Found!
 xWords      dd xLast
-xWdsLoop        dd xDeShowVB, xTab, doDup, doJmpNZ, xWdsLoop
+xWdsLoop        dd xDeShow, xTab, doDup, doJmpNZ, xWdsLoop
                 dd doDrop, doExit
 xBench      dd doTimer, doLit, 500000000, doDup, xDot, doFor, doNext
             dd doTimer, doSwap, doSub, xDot, doExit
 
 ; ----------------------------------------------------------------
 THE_DICT:
-        addDict doBye,    0, 3, "BYE",   tag0000
-        addDict doInc,    0, 2, "1+",    tag0010
-        addDict doDec,    0, 2, "1-",    tag0011
-        addDict doFetch,  0, 1, "@",     tag0020
-        addDict doStore,  0, 1, "!",     tag0021
-        addDict doCFetch, 0, 2, "C@",    tag0022
-        addDict doCStore, 0, 2, "C!",    tag0023
-        addDict doFor,    0, 3, "FOR",   tag0030
-        addDict doI,      0, 1, "I",     tag0031
-        addDict doNext,   0, 4, "NEXT",  tag0032
-        addDict xTIB,     0, 3, "TIB",   tag0060
-        addDict xToIn,    0, 3, ">IN",   tag0061
-        addDict xTab,     0, 3, "TAB",   tag0070
-        addDict xCR,      0, 2, "CR",    tag0080
-        addDict xWords,   0, 5, "WORDS", tag0090
-        addDict xCell,    0, 4, "CELL",  tag0100
-        addDict xCells,   0, 4, "CELLS", tag0101
-        addDict doItoA,   0, 3, "I>A",   tag0110
-        addDict xHere,    0, 4, "HERE",  tag0120
-        addDict xHA,      0, 2, "HA",    tag0130
-        addDict xLast,    0, 4, "LAST",  tag0140
-        addDict xLA,      0, 2, "LA",    tag0150
-        addDict doLen,    0, 5, "S-LEN", tag0160
-        addDict doKey,    0, 3, "KEY",   tag0170
-        addDict doQKey,   0, 4, "QKEY",  tag0180
-        addDict doDot,    0, 3, "(.)",   tag0190
-        addDict xDot,     0, 1, ".",     tag0191
+        dictEntry doBye,     0, 3, "BYE",    tag0000
+        dictEntry doInc,     0, 2, "1+",     tag0010
+        dictEntry doDec,     0, 2, "1-",     tag0011
+        dictEntry doFetch,   0, 1, "@",      tag0020
+        dictEntry doStore,   0, 1, "!",      tag0021
+        dictEntry doCFetch,  0, 2, "C@",     tag0022
+        dictEntry doCStore,  0, 2, "C!",     tag0023
+        dictEntry doFor,     0, 3, "FOR",    tag0030
+        dictEntry doI,       0, 1, "I",      tag0031
+        dictEntry doNext,    0, 4, "NEXT",   tag0032
+        dictEntry xTIB,      0, 3, "TIB",    tag0060
+        dictEntry xToIn,     0, 3, ">IN",    tag0061
+        dictEntry xTab,      0, 3, "TAB",    tag0070
+        dictEntry xCR,       0, 2, "CR",     tag0080
+        dictEntry xWords,    0, 5, "WORDS",  tag0090
+        dictEntry xCell,     0, 4, "CELL",   tag0100
+        dictEntry xCells,    0, 4, "CELLS",  tag0101
+        dictEntry doItoA,    0, 3, "I>A",    tag0110
+        dictEntry xHere,     0, 4, "HERE",   tag0120
+        dictEntry xHA,       0, 2, "HA",     tag0130
+        dictEntry xLast,     0, 4, "LAST",   tag0140
+        dictEntry xLA,       0, 2, "LA",     tag0150
+        dictEntry doLen,     0, 5, "S-LEN",  tag0160
+        dictEntry doStrEq,   0, 4, "S-EQ",   tag0161
+        dictEntry doStrEqI,  0, 5, "S-EQI",  tag0162
+        dictEntry doKey,     0, 3, "KEY",    tag0170
+        dictEntry doQKey,    0, 4, "QKEY",   tag0180
+        dictEntry doDot,     0, 3, "(.)",    tag0190
+        dictEntry xDot,      0, 1, ".",      tag0191
 ; TODO add more built-in dictionary entries here
-        addDict doDup,    0, 3, "DUP",   tagLast
+        dictEntry doDup,     0, 3, "DUP",    tagLast
         rb  DICT_SZ
 DICT_END:
 
