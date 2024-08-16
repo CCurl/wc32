@@ -490,6 +490,19 @@ doDotS: m_push  '('
         call    EMIT
         ret
 
+; **********************************************************************
+printChar:
+        push    eax
+        push    ebx
+        push    ecx
+        push    edx
+        call    EMIT
+        pop     edx
+        pop     ecx
+        pop     ebx
+        pop     eax
+        ret
+
 ; ******************************************************************************
 doDup:  getTOS  eax
         m_push  eax

@@ -26,19 +26,6 @@ EMIT: ; ( ch-- )
         ret
 
 ; **********************************************************************
-printChar:
-        push    eax
-        push    ebx
-        push    ecx
-        push    edx
-        call    EMIT
-        pop     edx
-        pop     ecx
-        pop     ebx
-        pop     eax
-        ret
-
-; **********************************************************************
 doType: m_pop   eax              ; Len ( addr len-- )
         m_pop   ebx              ; Addr
         invoke  WriteConsole, [hStdOut], ebx, eax, NULL, NULL
