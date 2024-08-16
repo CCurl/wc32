@@ -13,7 +13,7 @@ doTimer: ; invoke LinuxTimer
         ret
 
 ; **********************************************************************
-doEmit: push    eax
+EMIT:   push    eax
         m_pop   eax             ; ( ch-- )
         mov     [buf1], al      ; put char in message
         mov     eax,4           ; system call number (sys_write)

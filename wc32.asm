@@ -79,6 +79,7 @@ macro dictEntry XT, Flags, Len, Name, Tag {
 ; ******************************************************************************
 entry $
 main:   call    getHandles
+        mov     [InitialESP], esp
         mov     ebx, THE_CODE
         mov     [HERE], ebx
         mov     ebx, THE_VARS
@@ -112,20 +113,60 @@ wcRun:  lodsd
         jmp     wcRun
 
 ; ******************************************************************************
-doExit: mov     eax, [rStackPtr]
-        cmp     eax, rStack
-        jle     .U
-        mov     esi, [eax]
+; ******************************************************************************
+EXIT: call    checkRStack
+        test    edx, edx
+        jz      .U
+        mov     esi, [edx]
         sub     [rStackPtr], CELL_SZ
         ret
-.U:     m_push '-'
-        call    doEmit
+.U:     mov     esi, xWarm
+        ret
+
+; ******************************************************************************
+checkRStack:
+        mov     edx, [rStackPtr]
+        cmp     edx, rStack
+        jle     .Under
+        ret
+.Under: m_push '-'
+        call    EMIT
         m_push 'U'
-        call    doEmit
+        call    EMIT
         m_push '-'
-        call    doEmit
-        ; mov     esp, [InitialESP]
-        mov     esi, xWarm
+        call    EMIT
+        mov     [rStackPtr], rStack
+        xor     edx, edx
+        ret;
+
+; ******************************************************************************
+rStackTo: ; ( N-- )
+        m_pop   eax
+        add     [rStackPtr], CELL_SZ
+        mov     edx, [rStackPtr]
+        mov     [edx], eax
+        ret
+
+; ******************************************************************************
+rStackFrom: ; ( --N )
+        call    checkRStack
+        mov     eax, [edx]
+        m_push  eax
+        sub     [rStackPtr], CELL_SZ
+        ret
+
+; ******************************************************************************
+rStackFetch: ; ( --N )
+        call    checkRStack
+        mov     eax, [edx]
+        m_push  eax
+        ret
+
+; ******************************************************************************
+rStackStore: ; ( N-- )
+        call    checkRStack
+        m_pop   eax
+        mov     [edx], eax
         ret
 
 ; ******************************************************************************
@@ -171,27 +212,38 @@ doItoA: m_pop   eax
         ret
 
 ; ******************************************************************************
-doJmp:  m_pop  ebx
-        lodsd
-doJ:    mov    esi, eax
+JmpA:   lodsd
+doJ:    mov     esi, eax
         ret
 
 ; ******************************************************************************
-doJmpZ: m_pop  ebx
+JmpZ:   m_pop  ebx
         lodsd
         test   ebx, ebx
         jz     doJ
         ret
 
 ; ******************************************************************************
-doJmpNZ: m_pop  ebx
-         lodsd
-         test   ebx, ebx
-         jnz    doJ
-         ret
+JmpNZ:  m_pop  ebx
+        lodsd
+        test   ebx, ebx
+        jnz    doJ
+        ret
 
 ; ******************************************************************************
-doFetch: getTOS   edx
+NJmpZ:  lodsd
+        test   TOS, TOS
+        jz     doJ
+        ret
+
+; ******************************************************************************
+NJmpNZ: lodsd
+        test   TOS, TOS
+        jnz    doJ
+        ret
+
+; ******************************************************************************
+Fetch: getTOS   edx
          setTOS   [edx]
          ret
 
@@ -202,13 +254,13 @@ doStore: m_pop  edx
          ret
 
 ; ******************************************************************************
-doCFetch: xor     eax, eax
+CFetch: xor     eax, eax
         mov     al, BYTE [TOS]
         mov     TOS, eax
         ret
 
 ; ******************************************************************************
-doCStore: m_pop edx
+CStore: m_pop edx
         m_pop   eax
         mov     BYTE [edx], al
         ret
@@ -435,7 +487,7 @@ doDotS: m_push  '('
 .X:     call    doDup
         call    doDot
         m_push  ')'
-        call    doEmit
+        call    EMIT
         ret
 
 ; ******************************************************************************
@@ -474,7 +526,7 @@ doLen:  m_pop   edx             ; ( addr--len )
         ret
 
 ; ******************************************************************************
-skipWS: mov     edx, [ToIn]     ; Updates ToIn to point to the next non-whitespace char
+skipWS: mov     edx, [ToIn]     ; Updates ToIn to point to the next non-whitespace char or NULL
         xor     eax, eax
 .L:     mov     al, [edx]
         cmp     al, 32
@@ -550,7 +602,7 @@ doStrEqI:      ; ( str1 str2--fl )
 .X:     ret
 
 ; ******************************************************************************
-doLit:  lodsd
+Lit:  lodsd
         m_push eax
         ret
 
@@ -593,6 +645,7 @@ match =LINUX,   FOR_OS { segment readable writable }
 
 hStdIn      dd  ?
 hStdOut     dd  ?
+InitialESP  dd ?
 okStr       db  " ok", 0
 i2aBuf      db  64 dup ?
 bytesRead   dd  ?
@@ -621,74 +674,89 @@ xCold       dd xHA, xDot, xHere, xDot, xLast, xDot, xCell, xDot, doDotS
                 dd xCR, xWords, doDotS, xBench
                 dd xCR, xCR, xNum+10, doFor, doI, doInc, xDot, doNext, doDotS
                 dd xCR, xNum+11, xNum+22, xNum+33, doDotS, doDrop, doDrop, doDrop
-xWarm       dd xInterp, doJmp, xWarm
-xInterp     dd xOK, xTIB, xTIBSZ, xAccept, doDrop ; , xTIB, doAdd, xNum, doSwap, doCStore
+xWarm       dd xInterp, JmpA, xWarm
+xInterp     dd xOK, xTIB, xTIBSZ, xAccept, doDrop ; , xTIB, doAdd, xNum, doSwap, CStore
                 ; dd xTIB, doDup, doLen, doType, xSpace
-                dd xTIB, xToIn, doStore, doDotS, xHere, xDot
-xIntLoop        dd nextWd, doJmpNZ, xIntNumQ, doDrop, doExit            ; Get next word, exit if no more words
-xIntNumQ        dd doLit, buf2, doDup, doLen, doType, xSpace            ; *** temp ***
-                dd doDup, doNumQ, doJmpZ, xIntDictQ                     ; Is it a number?
-                dd doDup, xNum+'n', doEmit, doDot, xNum+'n', doEmit     ; *** temp - yes, it is a number! ***
-                dd xCompNum, doJmp, xIntLoop                            ; Yes, it is a number
-xIntDictQ       dd xFind, doJmpZ, xIntERR                               ; Is it in the dictionary?
-                dd xDot, doDot, xNum+'!', doEmit                        ; *** temp - yes! ***
-                dd doJmp, xIntLoop
-xIntERR         dd xNum+'?', xNum+'?', doEmit, doEmit, doExit
-xExecute    dd doExit
-xCompNum    dd doDup, doLit, 0x80000000, doAnd, doJmpNZ, xCompLit
-                dd doLit, xNum, doOr, doComma, doExit
-xCompLit        dd doLit, doLit, doComma, doComma, doExit
+                dd xTIB, xToIn, doStore; , doDotS, xHere, xDot
+xIntLoop        dd nextWd, JmpNZ, xIntNumQ, doDrop, EXIT                ; Get next word, exit if no more words
+xIntNumQ:       ; dd Lit, buf2, doDup, doLen, doType, xSpace            ; *** temp ***
+                dd doNumQ, JmpZ, xIntDictQ                              ; Is it a number?
+                ; dd doDup, xNum+'n', EMIT, doDot, xNum+'n', EMIT       ; *** temp - yes, it is a number! ***
+                dd xCompNum, JmpA, xIntLoop                             ; Yes, it is a number!
+xIntDictQ       dd Lit, buf2, xFind, JmpZ, xIntERR                      ; Is it in the dictionary?
+                dd JmpNZ, xIntImmed                                     ; YES! Is it immediate?
+                ; dd xNum+'C', EMIT, xNum+'-', EMIT, doDup, xDot        ; *** temp ***
+                dd xExecute, JmpA, xIntLoop
+                dd doComma, JmpA, xIntLoop
+xIntImmed       dd xNum+'I', EMIT, xNum+'-', EMIT, doDot
+                dd JmpA, xIntLoop
+xIntERR         dd xNum+'?', xNum+'?', EMIT, EMIT, EXIT
+xExecute    dd rStackTo, EXIT
+; xExecute    dd rStackTo, EXIT
+xCompNum    dd EXIT
+                ; dd doDup, Lit, 0x80000000, doAnd, JmpNZ, xCompLit
+                ; dd Lit, xNum, doOr, doComma, EXIT
+xCompLit        dd Lit, Lit, doComma, doComma, EXIT
 xDeShow     dd doDup, xDeName                   ; First char of name    ( a1--a2 )
                 dd doDup, doLen, doType         ; Name length
-                dd xDeNext, doExit              ; Next entry
+                dd xDeNext, EXIT              ; Next entry
 xDeShowVB   dd xCR, doDup, xDeNext, xDot        ; Next    ( a1--a2 )
                 dd doDup, xDeXT,    xDot        ; XT
                 dd doDup, xDeFlags, xDot        ; Flags
                 dd doDup, xDeName               ; First char of name
                 dd doDup, doLen, doType         ; Name length
-                dd xDeNext, doExit              ; Next entry
-xDeNext     dd xNum+DE_NEXT_OFFSET,  doAdd, doFetch,  doExit      ; dict entry Next  ( de--next )
-xDeXT       dd xNum+DE_XT_OFFSET,    doAdd, doFetch,  doExit      ; dict entry XT    ( de--xt )
-xDeFlags    dd xNum+DE_FLAGS_OFFSET, doAdd, doCFetch, doExit      ; dict entry flags ( de--flags )
-xDeLen      dd xNum+DE_LEN_OFFSET,   doAdd, doCFetch, doExit      ; dict entry len   ( de--len )
-xDeName     dd xNum+DE_NAME_OFFSET,  doAdd, doExit                ; dict entry name  ( de--addr )
-xSpace      dd xNum+32, doEmit, doExit
-xCR         dd xNum+13, doEmit, xNum+10, doEmit, doExit
-xTab        dd xNum+9, doEmit, doExit
-xHA         dd doLit, HERE, doExit
-xHere       dd xHA, doFetch, doExit
-xLA         dd doLit, LAST, doExit
-xLast       dd xLA, doFetch, doExit
-xDot        dd doDot, xSpace, doExit
-xCell       dd xNum+CELL_SZ, doExit
-xCells      dd xCell, doMult, doExit
-xOK         dd doLit, okStr, xNum+3, doType, xCR, doExit
-xTIB        dd doLit, TIB, doExit
-xTIBSZ      dd xNum+TIB_SZ, doExit
-xToIn       dd doLit, ToIn, doExit
-xAccept     dd doReadL, doExit
+                dd xDeNext, EXIT              ; Next entry
+xDeNext     dd xNum+DE_NEXT_OFFSET,  doAdd, Fetch,  EXIT      ; dict entry Next  ( de--next )
+xDeXT       dd xNum+DE_XT_OFFSET,    doAdd, Fetch,  EXIT      ; dict entry XT    ( de--xt )
+xDeFlags    dd xNum+DE_FLAGS_OFFSET, doAdd, CFetch, EXIT      ; dict entry flags ( de--flags )
+xDeLen      dd xNum+DE_LEN_OFFSET,   doAdd, CFetch, EXIT      ; dict entry len   ( de--len )
+xDeName     dd xNum+DE_NAME_OFFSET,  doAdd, EXIT                ; dict entry name  ( de--addr )
+xWords      dd xLast
+xWdsLoop        dd xDeShowVB, xTab, doDup, JmpNZ, xWdsLoop
+                dd doDrop, EXIT
+xSpace      dd xNum+32, EMIT, EXIT
+xCR         dd xNum+13, EMIT, xNum+10, EMIT, EXIT
+xTab        dd xNum+9, EMIT, EXIT
+xHA         dd Lit, HERE, EXIT
+xHere       dd xHA, Fetch, EXIT
+xLA         dd Lit, LAST, EXIT
+xLast       dd xLA, Fetch, EXIT
+xDot        dd doDot, xSpace, EXIT
+xDotS       dd doDotS, EXIT
+xCell       dd xNum+CELL_SZ, EXIT
+xCells      dd xCell, doMult, EXIT
+xOK         dd Lit, okStr, xNum+3, doType, xCR, EXIT
+xTIB        dd Lit, TIB, EXIT
+xTIBSZ      dd xNum+TIB_SZ, EXIT
+xToIn       dd Lit, ToIn, EXIT
+xAccept     dd doReadL, EXIT
 xFind      dd xLast                                                 ; ( str--xt fl 1 | 0 )
 xFindLoop       dd doOver, doOver, xDeName
-                dd doStrEqI, doJmpZ, xFindNext
+                dd doStrEqI, JmpZ, xFindNext
                 dd doSwap, doDrop, doDup, xDeXT, doSwap, xDeFlags   ; FOUND!
-                dd xNum+1, doExit
-xFindNext       dd xDeNext, doDup, doJmpNZ, xFindLoop
-                dd doDrop, doDrop, xNum, doExit                     ; NOT Found!
-xWords      dd xLast
-xWdsLoop        dd xDeShow, xTab, doDup, doJmpNZ, xWdsLoop
-                dd doDrop, doExit
-xBench      dd doTimer, doLit, 500000000, doDup, xDot, doFor, doNext
-            dd doTimer, doSwap, doSub, xDot, doExit
+                dd xNum+1, EXIT
+xFindNext       dd xDeNext, doDup, JmpNZ, xFindLoop
+                dd doDrop, doDrop, xNum, EXIT                     ; NOT Found!
+xBench      dd doTimer, Lit, 500000000, doDup, xDot, doFor, doNext
+            dd doTimer, doSwap, doSub, xDot, EXIT
+xIf         dd Lit, JmpZ,   doComma, xHere, xNum, doComma, EXIT
+xIf0        dd Lit, JmpNZ,  doComma, xHere, xNum, doComma, EXIT
+xNIf        dd Lit, NJmpZ,  doComma, xHere, xNum, doComma, EXIT
+xNIf0       dd Lit, NJmpNZ, doComma, xHere, xNum, doComma, EXIT
+xElse       dd EXIT ; TODO
+xThen       dd xHere, doSwap, doStore, EXIT
+xEmit       dd EMIT, EXIT
+xBye        dd doBye, EXIT
 
 ; ----------------------------------------------------------------
 THE_DICT:
-        dictEntry doBye,     0, 3, "BYE",    tag0000
+        dictEntry xBye,      0, 3, "BYE",    tag0000
         dictEntry doInc,     0, 2, "1+",     tag0010
         dictEntry doDec,     0, 2, "1-",     tag0011
-        dictEntry doFetch,   0, 1, "@",      tag0020
+        dictEntry Fetch,     0, 1, "@",      tag0020
         dictEntry doStore,   0, 1, "!",      tag0021
-        dictEntry doCFetch,  0, 2, "C@",     tag0022
-        dictEntry doCStore,  0, 2, "C!",     tag0023
+        dictEntry CFetch,    0, 2, "C@",     tag0022
+        dictEntry CStore,    0, 2, "C!",     tag0023
         dictEntry doFor,     0, 3, "FOR",    tag0030
         dictEntry doI,       0, 1, "I",      tag0031
         dictEntry doNext,    0, 4, "NEXT",   tag0032
@@ -711,6 +779,14 @@ THE_DICT:
         dictEntry doQKey,    0, 4, "QKEY",   tag0180
         dictEntry doDot,     0, 3, "(.)",    tag0190
         dictEntry xDot,      0, 1, ".",      tag0191
+        dictEntry xDotS,     0, 2, ".S",     tag0192
+        dictEntry xIf,       1, 2, "IF",     tag0200
+        dictEntry xIf0,      1, 3, "IF0",    tag0201
+        dictEntry xNIf,      1, 3, "-IF",    tag0202
+        dictEntry xNIf0,     1, 4, "-IF0",   tag0203
+        dictEntry xElse,     1, 4, "ELSE",   tag0204
+        dictEntry xThen,     1, 4, "THEN",   tag0205
+        dictEntry xEmit,     0, 4, "EMIT",   tag0210
 ; TODO add more built-in dictionary entries here
         dictEntry doDup,     0, 3, "DUP",    tagLast
         rb  DICT_SZ

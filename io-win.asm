@@ -19,7 +19,7 @@ doTimer: ; ( --N )
         ret
 
 ; **********************************************************************
-doEmit: ; ( ch-- )
+EMIT: ; ( ch-- )
         m_pop   eax
         mov     [buf1], al
         invoke  WriteConsole, [hStdOut], buf1, 1, NULL, NULL
@@ -31,7 +31,7 @@ printChar:
         push    ebx
         push    ecx
         push    edx
-        call    doEmit
+        call    EMIT
         pop     edx
         pop     ecx
         pop     ebx
