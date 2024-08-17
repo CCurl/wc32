@@ -488,7 +488,7 @@ doDot:  push    eax
         call    iToA
         m_push  ecx
         m_push  ebx
-        call    doType
+        call    TYPE
         pop     edx
         pop     ecx
         pop     ebx
@@ -711,10 +711,10 @@ xCold       dd xHA, xDot, xHere, xDot, xLast, xDot, CELL, xDot, doDotS
                 dd xCR, xNum+11, xNum+22, xNum+33, doDotS, doDrop, doDrop, doDrop
 xWarm       dd xInterp, JmpA, xWarm
 xInterp     dd xOK, xTIB, xTIBSZ, xAccept, doDrop ; , xTIB, PLUS, xNum, SWAP, CStore
-                ; dd xTIB, doDup, doLen, doType, xSpace
+                ; dd xTIB, doDup, doLen, TYPE, xSpace
                 dd xTIB, xToIn, doStore; , doDotS, xHere, xDot
 xIntLoop        dd nextWd, JmpNZ, xIntNumQ, doDrop, EXIT                ; Get next word, exit if no more words
-xIntNumQ:       ; dd Lit, buf2, doDup, doLen, doType, xSpace            ; *** temp ***
+xIntNumQ:       ; dd Lit, buf2, doDup, doLen, TYPE, xSpace              ; *** temp ***
                 dd doNumQ, JmpZ, xIntDictQ                              ; Is it a number?
                 ; dd doDup, xNum+'n', EMIT, doDot, xNum+'n', EMIT       ; *** temp - yes, it is a number! ***
                 dd xCompNum, JmpA, xIntLoop                             ; Yes, it is a number!
@@ -732,13 +732,13 @@ xCompNum    dd EXIT
                 ; dd Lit, xNum, doOr, doComma, EXIT
 xCompLit        dd Lit, Lit, doComma, doComma, EXIT
 xDeShow     dd doDup, xDeName                   ; First char of name    ( a1--a2 )
-                dd doDup, doLen, doType         ; Name length
+                dd doDup, doLen, TYPE           ; Name length
                 dd xDeNext, EXIT                ; Next entry
 xDeShowVB   dd xCR, doDup, xDeNext, xDot        ; Next    ( a1--a2 )
                 dd doDup, xDeXT,    xDot        ; XT
                 dd doDup, xDeFlags, xDot        ; Flags
                 dd doDup, xDeName               ; First char of name
-                dd doDup, doLen, doType         ; Name length
+                dd doDup, doLen, TYPE           ; Name length
                 dd xDeNext, EXIT                ; Next entry
 xDeNext     dd xNum+DE_NEXT_OFFSET,  PLUS, Fetch,  EXIT      ; dict entry Next  ( de--next )
 xDeXT       dd xNum+DE_XT_OFFSET,    PLUS, Fetch,  EXIT      ; dict entry XT    ( de--xt )
@@ -746,7 +746,7 @@ xDeFlags    dd xNum+DE_FLAGS_OFFSET, PLUS, CFetch, EXIT      ; dict entry flags 
 xDeLen      dd xNum+DE_LEN_OFFSET,   PLUS, CFetch, EXIT      ; dict entry len   ( de--len )
 xDeName     dd xNum+DE_NAME_OFFSET,  PLUS, EXIT              ; dict entry name  ( de--addr )
 xWords      dd xLast
-xWdsLoop        dd xDeShowVB, xTab, doDup, JmpNZ, xWdsLoop
+xWdsLoop        dd xDeShow, xTab, doDup, JmpNZ, xWdsLoop
                 dd doDrop, EXIT
 xSpace      dd xNum+32, EMIT, EXIT
 xCR         dd xNum+13, EMIT, xNum+10, EMIT, EXIT
@@ -757,7 +757,7 @@ xLA         dd Lit, LAST, EXIT
 xLast       dd xLA, Fetch, EXIT
 xBASE       dd Lit, BASE, EXIT
 xDot        dd doDot, xSpace, EXIT
-xOK         dd Lit, okStr, xNum+3, doType, xCR, EXIT
+xOK         dd Lit, okStr, xNum+3, TYPE, xCR, EXIT
 xTIB        dd Lit, TIB, EXIT
 xTIBSZ      dd xNum+TIB_SZ, EXIT
 xToIn       dd Lit, ToIn, EXIT
@@ -821,6 +821,7 @@ THE_DICT:
         dictEntry xElse,     1, 4, "ELSE",   tag0204
         dictEntry xThen,     1, 4, "THEN",   tag0205
         dictEntry EMIT,      0, 4, "EMIT",   tag0210
+        dictEntry TYPE,      0, 4, "TYPE",   tag0211
         dictEntry EXIT,      0, 4, "EXIT",   tag0220
         dictEntry PLUS,      0, 1, "+",      tag0231
         dictEntry MINUS,     0, 1, "-",      tag0232

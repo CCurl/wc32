@@ -4,7 +4,9 @@
 getHandles: ret
 
 ; **********************************************************************
-doBye:  ; invoke  LinuxExit, 0
+doBye:  mov     eax,1           ; system call number (sys_exit)
+        mov     ebx,0           ; return status
+        int     0x80
         ret
 
 ; **********************************************************************
@@ -25,7 +27,8 @@ EMIT:   push    eax
         ret
 
 ; **********************************************************************
-doType: m_pop   edx             ; Len ( string len-- )
+TYPE:   ; ( string len-- )
+        m_pop   edx             ; Len
         m_pop   ecx             ; String
         mov     eax,4           ; system call number (sys_write)
         mov     ebx,1           ; file descriptor (stdout)
@@ -33,26 +36,27 @@ doType: m_pop   edx             ; Len ( string len-- )
         ret
 
 ; **********************************************************************
-doReadL: m_pop edx              ; buffer size ( buf sz--num )
-            m_pop  ecx             ; buffer
-            mov    ebx, 0          ; stdin
-            mov    eax, 3          ; sys_read
-            push   ecx
-            int    0x80
-            pop    ecx
-            dec    eax             ; Remove the <LF>
-            m_push eax
-            mov    [ecx+eax], BYTE 0
+doReadL: ; ( addr sz--num )
+        m_pop edx               ; buffer size ( buf sz--num )
+        m_pop  ecx              ; buffer
+        mov    ebx, 0           ; stdin
+        mov    eax, 3           ; sys_read
+        push   ecx
+        int    0x80
+        pop    ecx
+        dec    eax              ; Remove the <LF>
+        m_push eax
+        mov    [ecx+eax], BYTE 0
         ret
 
 ; **********************************************************************
-doQKey: ; invoke LinuxKey
-        m_push  DWORD 0
+doQKey: ; ( --n ) - TODO
+        m_push 0
         ret
 
 ; **********************************************************************
-doKey: ; invoke LinuxQKey
-        m_push  DWORD 0
+doKey:  ; ( --fl ) - TODO
+        m_push 0
         ret
 
 ; **********************************************************************

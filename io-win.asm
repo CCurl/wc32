@@ -9,6 +9,7 @@ getHandles:
         mov    [hStdOut], eax
         ret
 
+; **********************************************************************
 doBye:  invoke  ExitProcess, 0
         ret
 
@@ -26,19 +27,20 @@ EMIT: ; ( ch-- )
         ret
 
 ; **********************************************************************
-doType: m_pop   eax              ; Len ( addr len-- )
-        m_pop   ebx              ; Addr
+TYPE: ;  ( addr len-- )
+        m_pop   eax             ; Len
+        m_pop   ebx             ; Addr
         invoke  WriteConsole, [hStdOut], ebx, eax, NULL, NULL
         ret
 
 ; **********************************************************************
 doReadL: ; ( addr sz--num )
         m_pop  edx              ; buffer size
-        getTOS ecx             ; buffer
+        getTOS ecx              ; buffer
         invoke ReadConsole, [hStdIn], ecx, edx, bytesRead, 0
         mov    eax, [bytesRead]
-        dec    eax             ; Remove the <LF>
-        dec    eax             ; Remove the <CR>
+        dec    eax              ; Remove the <LF>
+        dec    eax              ; Remove the <CR>
         getTOS ecx
         mov    [ecx+eax], BYTE 0
         setTOS eax
