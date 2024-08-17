@@ -170,6 +170,15 @@ rStackStore: ; ( N-- )
         ret
 
 ; ******************************************************************************
+doExecute: ; ( xt-- )
+        m_pop   eax
+        cmp     eax, primEnd
+        jg      .WD
+        jmp     eax
+.WD:    mov     esi, eax
+        ret
+
+; ******************************************************************************
 doNop:  ret
 
 ; ******************************************************************************
@@ -699,12 +708,11 @@ xIntNumQ:       ; dd Lit, buf2, doDup, doLen, doType, xSpace            ; *** te
 xIntDictQ       dd Lit, buf2, xFind, JmpZ, xIntERR                      ; Is it in the dictionary?
                 dd JmpNZ, xIntImmed                                     ; YES! Is it immediate?
                 ; dd xNum+'C', EMIT, xNum+'-', EMIT, doDup, xDot        ; *** temp ***
-                dd xExecute, JmpA, xIntLoop
+                dd doExecute, JmpA, xIntLoop
                 dd doComma, JmpA, xIntLoop
 xIntImmed       dd xNum+'I', EMIT, xNum+'-', EMIT, doDot
                 dd JmpA, xIntLoop
 xIntERR         dd xNum+'?', xNum+'?', EMIT, EMIT, EXIT
-xExecute    dd rStackTo, EXIT
 ; xExecute    dd rStackTo, EXIT
 xCompNum    dd EXIT
                 ; dd doDup, Lit, 0x80000000, doAnd, JmpNZ, xCompLit
@@ -735,7 +743,6 @@ xHere       dd xHA, Fetch, EXIT
 xLA         dd Lit, LAST, EXIT
 xLast       dd xLA, Fetch, EXIT
 xDot        dd doDot, xSpace, EXIT
-xDotS       dd doDotS, EXIT
 xCell       dd xNum+CELL_SZ, EXIT
 xCells      dd xCell, doMult, EXIT
 xOK         dd Lit, okStr, xNum+3, doType, xCR, EXIT
@@ -758,12 +765,10 @@ xNIf        dd Lit, NJmpZ,  doComma, xHere, xNum, doComma, EXIT
 xNIf0       dd Lit, NJmpNZ, doComma, xHere, xNum, doComma, EXIT
 xElse       dd EXIT ; TODO
 xThen       dd xHere, doSwap, doStore, EXIT
-xEmit       dd EMIT, EXIT
-xBye        dd doBye, EXIT
 
 ; ----------------------------------------------------------------
 THE_DICT:
-        dictEntry xBye,      0, 3, "BYE",    tag0000
+        dictEntry doBye,     0, 3, "BYE",    tag0000
         dictEntry doInc,     0, 2, "1+",     tag0010
         dictEntry doDec,     0, 2, "1-",     tag0011
         dictEntry Fetch,     0, 1, "@",      tag0020
@@ -792,14 +797,15 @@ THE_DICT:
         dictEntry doQKey,    0, 4, "QKEY",   tag0180
         dictEntry doDot,     0, 3, "(.)",    tag0190
         dictEntry xDot,      0, 1, ".",      tag0191
-        dictEntry xDotS,     0, 2, ".S",     tag0192
+        dictEntry doDotS,    0, 2, ".S",     tag0192
         dictEntry xIf,       1, 2, "IF",     tag0200
         dictEntry xIf0,      1, 3, "IF0",    tag0201
         dictEntry xNIf,      1, 3, "-IF",    tag0202
         dictEntry xNIf0,     1, 4, "-IF0",   tag0203
         dictEntry xElse,     1, 4, "ELSE",   tag0204
         dictEntry xThen,     1, 4, "THEN",   tag0205
-        dictEntry xEmit,     0, 4, "EMIT",   tag0210
+        dictEntry EMIT,      0, 4, "EMIT",   tag0210
+        dictEntry EXIT,      0, 4, "EXIT",   tag0220
 ; TODO add more built-in dictionary entries here
         dictEntry doDup,     0, 3, "DUP",    tagLast
         rb  DICT_SZ
