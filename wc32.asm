@@ -114,7 +114,7 @@ wcRun:  lodsd
 
 ; ******************************************************************************
 ; ******************************************************************************
-EXIT: call    checkRStack
+EXIT:   call    checkRStack
         test    edx, edx
         jz      .U
         mov     esi, [edx]
@@ -171,12 +171,10 @@ rStackStore: ; ( N-- )
 
 ; ******************************************************************************
 doExecute: ; ( xt-- )
+        cmp     TOS, primEnd
+        jg      rStackTo
         m_pop   eax
-        cmp     eax, primEnd
-        jg      .WD
         jmp     eax
-.WD:    mov     esi, eax
-        ret
 
 ; ******************************************************************************
 doNop:  ret
@@ -186,7 +184,7 @@ doNop:  ret
 ; output:       ; ecx: the start of the string
 ;               ; ebx: the length of the string
 ;
-iToA:   mov     ecx, i2aBuf+63  ; output string start
+iToA:   mov     ecx, buf3+63  ; output string start
         mov     ebx, 0          ; output length
         mov     BYTE [ecx], 0
         push    0               ; isNegative flag
@@ -195,13 +193,16 @@ iToA:   mov     ecx, i2aBuf+63  ; output string start
         inc     BYTE [esp]
         neg     eax
 .L:     push    ebx
-        mov     ebx, 10
+        mov     ebx, [BASE]
         mov     edx, 0
         div     ebx
-        add     dl, '0'
-        dec     ecx 
-        mov     BYTE [ecx], dl
         pop     ebx
+        add     dl, '0'
+        cmp     dl, '9'
+        jle     .C
+        add     dl, 7
+.C:     dec     ecx 
+        mov     BYTE [ecx], dl
         inc     ebx
         test    eax, eax
         jnz     .L
@@ -374,29 +375,35 @@ match =WINDOWS, FOR_OS { include 'io-win.asm' }
 match =LINUX,   FOR_OS { include 'io-lin.asm' }
 
 ; ******************************************************************************
-doMult: m_pop   eax
+CELL:   m_push  CELL_SZ
+        ret
+
+; ******************************************************************************
+CELLS:  m_push  CELL_SZ
+MULT:   m_pop   eax
         imul    TOS, eax
         ret
 
 ; ******************************************************************************
-doSub:  m_pop   eax
+MINUS:  m_pop   eax
         sub     TOS, eax
         ret
 
 ; ******************************************************************************
-doAdd:  m_pop   eax
+PLUS:   m_pop   eax
         add     TOS, eax
         ret
 
 ; ******************************************************************************
-doMod:  m_pop   ebx
-        cmp     ebx, 0
-        je      .X
-        m_pop   eax
-        mov     edx, 0
-        idiv    ebx
-        m_push  edx
-.X:     ret
+doSLMod: m_pop   ebx
+         cmp     ebx, 0
+         je      .X
+         m_pop   eax
+         mov     edx, 0
+         idiv    ebx
+         m_push  edx
+         m_push  eax
+.X:      ret
 
 ; ******************************************************************************
 doDiv:  m_pop   ebx
@@ -409,6 +416,13 @@ doDiv:  m_pop   ebx
 .X:     ret
 
 ; ******************************************************************************
+doMod:  call    doSLMod
+        jmp     doDrop
+
+; ******************************************************************************
+doInc4: inc     TOS
+doInc3: inc     TOS
+doInc2: inc     TOS
 doInc:  inc     TOS
         ret
 
@@ -518,7 +532,7 @@ doDup:  getTOS  eax
         ret
 
 ; ******************************************************************************
-doSwap: get2ND    eax
+SWAP:   get2ND    eax
         set2ND    TOS
         setTOS    eax
         ret
@@ -669,7 +683,6 @@ hStdIn      dd  ?
 hStdOut     dd  ?
 InitialESP  dd ?
 okStr       db  " ok", 0
-i2aBuf      db  64 dup ?
 bytesRead   dd  ?
 unkOP       db  "-unk-"
 rStackPtr   dd  rStack
@@ -677,27 +690,27 @@ lStackPtr   dd  lStack
 HERE        dd  THE_CODE
 VHERE       dd  THE_VARS
 LAST        dd  tagLast
-BASE        dd  16
+BASE        dd  10
 HERE1       dd  ?
 TIB         dd  TIB_SZ dup 0
 ToIn        dd  ?
 
-buf1        db   32 dup 0       ; Buffer (used for EMIT)
+buf1        db    4 dup 0       ; Buffer (used by EMIT)
 dStack      dd   64 dup 0       ; Data stack
-buf2        db   32 dup 0       ; Buffer (used for nextWd)
+buf2        db   32 dup 0       ; Buffer (used by nextWd)
 rStack      dd   64 dup 0       ; Return stack
-buf3        db   32 dup 0       ; Buffer
+buf3        db   64 dup 0       ; Buffer (used by iToA)
 lStack      dd   64 dup 0       ; Loop stack
 buf4        db   32 dup 0       ; Buffer
 
 ; ----------------------------------------------------------------
 THE_ROM:
-xCold       dd xHA, xDot, xHere, xDot, xLast, xDot, xCell, xDot, doDotS
+xCold       dd xHA, xDot, xHere, xDot, xLast, xDot, CELL, xDot, doDotS
                 dd xCR, xWords, doDotS, xBench
                 dd xCR, xCR, xNum+10, doFor, doI, doInc, xDot, doNext, doDotS
                 dd xCR, xNum+11, xNum+22, xNum+33, doDotS, doDrop, doDrop, doDrop
 xWarm       dd xInterp, JmpA, xWarm
-xInterp     dd xOK, xTIB, xTIBSZ, xAccept, doDrop ; , xTIB, doAdd, xNum, doSwap, CStore
+xInterp     dd xOK, xTIB, xTIBSZ, xAccept, doDrop ; , xTIB, PLUS, xNum, SWAP, CStore
                 ; dd xTIB, doDup, doLen, doType, xSpace
                 dd xTIB, xToIn, doStore; , doDotS, xHere, xDot
 xIntLoop        dd nextWd, JmpNZ, xIntNumQ, doDrop, EXIT                ; Get next word, exit if no more words
@@ -708,30 +721,30 @@ xIntNumQ:       ; dd Lit, buf2, doDup, doLen, doType, xSpace            ; *** te
 xIntDictQ       dd Lit, buf2, xFind, JmpZ, xIntERR                      ; Is it in the dictionary?
                 dd JmpNZ, xIntImmed                                     ; YES! Is it immediate?
                 ; dd xNum+'C', EMIT, xNum+'-', EMIT, doDup, xDot        ; *** temp ***
-                dd doExecute, JmpA, xIntLoop
+                dd xExecute, JmpA, xIntLoop
                 dd doComma, JmpA, xIntLoop
 xIntImmed       dd xNum+'I', EMIT, xNum+'-', EMIT, doDot
                 dd JmpA, xIntLoop
 xIntERR         dd xNum+'?', xNum+'?', EMIT, EMIT, EXIT
-; xExecute    dd rStackTo, EXIT
+xExecute    dd doExecute, EXIT
 xCompNum    dd EXIT
                 ; dd doDup, Lit, 0x80000000, doAnd, JmpNZ, xCompLit
                 ; dd Lit, xNum, doOr, doComma, EXIT
 xCompLit        dd Lit, Lit, doComma, doComma, EXIT
 xDeShow     dd doDup, xDeName                   ; First char of name    ( a1--a2 )
                 dd doDup, doLen, doType         ; Name length
-                dd xDeNext, EXIT              ; Next entry
+                dd xDeNext, EXIT                ; Next entry
 xDeShowVB   dd xCR, doDup, xDeNext, xDot        ; Next    ( a1--a2 )
                 dd doDup, xDeXT,    xDot        ; XT
                 dd doDup, xDeFlags, xDot        ; Flags
                 dd doDup, xDeName               ; First char of name
                 dd doDup, doLen, doType         ; Name length
-                dd xDeNext, EXIT              ; Next entry
-xDeNext     dd xNum+DE_NEXT_OFFSET,  doAdd, Fetch,  EXIT      ; dict entry Next  ( de--next )
-xDeXT       dd xNum+DE_XT_OFFSET,    doAdd, Fetch,  EXIT      ; dict entry XT    ( de--xt )
-xDeFlags    dd xNum+DE_FLAGS_OFFSET, doAdd, CFetch, EXIT      ; dict entry flags ( de--flags )
-xDeLen      dd xNum+DE_LEN_OFFSET,   doAdd, CFetch, EXIT      ; dict entry len   ( de--len )
-xDeName     dd xNum+DE_NAME_OFFSET,  doAdd, EXIT                ; dict entry name  ( de--addr )
+                dd xDeNext, EXIT                ; Next entry
+xDeNext     dd xNum+DE_NEXT_OFFSET,  PLUS, Fetch,  EXIT      ; dict entry Next  ( de--next )
+xDeXT       dd xNum+DE_XT_OFFSET,    PLUS, Fetch,  EXIT      ; dict entry XT    ( de--xt )
+xDeFlags    dd xNum+DE_FLAGS_OFFSET, PLUS, CFetch, EXIT      ; dict entry flags ( de--flags )
+xDeLen      dd xNum+DE_LEN_OFFSET,   PLUS, CFetch, EXIT      ; dict entry len   ( de--len )
+xDeName     dd xNum+DE_NAME_OFFSET,  PLUS, EXIT              ; dict entry name  ( de--addr )
 xWords      dd xLast
 xWdsLoop        dd xDeShowVB, xTab, doDup, JmpNZ, xWdsLoop
                 dd doDrop, EXIT
@@ -742,9 +755,8 @@ xHA         dd Lit, HERE, EXIT
 xHere       dd xHA, Fetch, EXIT
 xLA         dd Lit, LAST, EXIT
 xLast       dd xLA, Fetch, EXIT
+xBASE       dd Lit, BASE, EXIT
 xDot        dd doDot, xSpace, EXIT
-xCell       dd xNum+CELL_SZ, EXIT
-xCells      dd xCell, doMult, EXIT
 xOK         dd Lit, okStr, xNum+3, doType, xCR, EXIT
 xTIB        dd Lit, TIB, EXIT
 xTIBSZ      dd xNum+TIB_SZ, EXIT
@@ -753,24 +765,27 @@ xAccept     dd doReadL, EXIT
 xFind      dd xLast                                                 ; ( str--xt fl 1 | 0 )
 xFindLoop       dd doOver, doOver, xDeName
                 dd doStrEqI, JmpZ, xFindNext
-                dd doSwap, doDrop, doDup, xDeXT, doSwap, xDeFlags   ; FOUND!
+                dd SWAP, doDrop, doDup, xDeXT, SWAP, xDeFlags   ; FOUND!
                 dd xNum+1, EXIT
 xFindNext       dd xDeNext, doDup, JmpNZ, xFindLoop
                 dd doDrop, doDrop, xNum, EXIT                     ; NOT Found!
 xBench      dd doTimer, Lit, 500000000, doDup, xDot, doFor, doNext
-            dd doTimer, doSwap, doSub, xDot, EXIT
+            dd doTimer, SWAP, MINUS, xDot, EXIT
 xIf         dd Lit, JmpZ,   doComma, xHere, xNum, doComma, EXIT
 xIf0        dd Lit, JmpNZ,  doComma, xHere, xNum, doComma, EXIT
 xNIf        dd Lit, NJmpZ,  doComma, xHere, xNum, doComma, EXIT
 xNIf0       dd Lit, NJmpNZ, doComma, xHere, xNum, doComma, EXIT
 xElse       dd EXIT ; TODO
-xThen       dd xHere, doSwap, doStore, EXIT
+xThen       dd xHere, SWAP, doStore, EXIT
 
 ; ----------------------------------------------------------------
 THE_DICT:
         dictEntry doBye,     0, 3, "BYE",    tag0000
-        dictEntry doInc,     0, 2, "1+",     tag0010
-        dictEntry doDec,     0, 2, "1-",     tag0011
+        dictEntry doInc,     0, 2, "1+",     tag0011
+        dictEntry doInc2,    0, 2, "2+",     tag0012
+        dictEntry doInc3,    0, 2, "3+",     tag0013
+        dictEntry doInc4,    0, 2, "4+",     tag0014
+        dictEntry doDec,     0, 2, "1-",     tag0015
         dictEntry Fetch,     0, 1, "@",      tag0020
         dictEntry doStore,   0, 1, "!",      tag0021
         dictEntry CFetch,    0, 2, "C@",     tag0022
@@ -783,13 +798,14 @@ THE_DICT:
         dictEntry xTab,      0, 3, "TAB",    tag0070
         dictEntry xCR,       0, 2, "CR",     tag0080
         dictEntry xWords,    0, 5, "WORDS",  tag0090
-        dictEntry xCell,     0, 4, "CELL",   tag0100
-        dictEntry xCells,    0, 4, "CELLS",  tag0101
+        dictEntry CELL,      0, 4, "CELL",   tag0100
+        dictEntry CELLS,     0, 4, "CELLS",  tag0101
         dictEntry doItoA,    0, 3, "I>A",    tag0110
         dictEntry xHere,     0, 4, "HERE",   tag0120
-        dictEntry xHA,       0, 2, "HA",     tag0130
-        dictEntry xLast,     0, 4, "LAST",   tag0140
-        dictEntry xLA,       0, 2, "LA",     tag0150
+        dictEntry xHA,       0, 2, "HA",     tag0121
+        dictEntry xLast,     0, 4, "LAST",   tag0122
+        dictEntry xLA,       0, 2, "LA",     tag0123
+        dictEntry xBASE,     0, 4, "BASE",   tag0124
         dictEntry doLen,     0, 5, "S-LEN",  tag0160
         dictEntry doStrEq,   0, 4, "S-EQ",   tag0161
         dictEntry doStrEqI,  0, 5, "S-EQI",  tag0162
@@ -806,6 +822,13 @@ THE_DICT:
         dictEntry xThen,     1, 4, "THEN",   tag0205
         dictEntry EMIT,      0, 4, "EMIT",   tag0210
         dictEntry EXIT,      0, 4, "EXIT",   tag0220
+        dictEntry PLUS,      0, 1, "+",      tag0231
+        dictEntry MINUS,     0, 1, "-",      tag0232
+        dictEntry MULT,      0, 1, "*",      tag0234
+        dictEntry doDiv,     0, 1, "/",      tag0235
+        dictEntry doSLMod,   0, 4, "/MOD",   tag0236
+        dictEntry doMod,     0, 3, "MOD",    tag0237
+        dictEntry SWAP,      0, 4, "SWAP",   tag240
 ; TODO add more built-in dictionary entries here
         dictEntry doDup,     0, 3, "DUP",    tagLast
         rb  DICT_SZ
