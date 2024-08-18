@@ -50,14 +50,14 @@ macro setTOS val { mov TOS, val }
 macro get2ND val { mov val, [STKP] }
 macro set2ND val { mov [STKP], val }
 
-macro m_push val {
+macro sPush val {
        add STKP, CELL_SZ
        mov [STKP], TOS
        setTOS val
 }
 
 ; ******************************************************************************
-macro m_pop val {
+macro sPop val {
        getTOS val
        mov TOS, [STKP]
        sub STKP, CELL_SZ
@@ -109,7 +109,7 @@ wcRun:  lodsd
         mov     esi, eax
         jmp     wcRun
 .NUM:   and     eax, numMask
-        m_push  eax
+        sPush    eax
         jmp     wcRun
 
 ; ******************************************************************************
@@ -129,11 +129,11 @@ checkRStack:
         cmp     edx, rStack
         jle     .Under
         ret
-.Under: m_push '-'
+.Under: sPush    '-'
         call    EMIT
-        m_push 'U'
+        sPush    'U'
         call    EMIT
-        m_push '-'
+        sPush    '-'
         call    EMIT
         mov     [rStackPtr], rStack
         xor     edx, edx
@@ -141,7 +141,7 @@ checkRStack:
 
 ; ******************************************************************************
 rStackTo: ; ( N-- )
-        m_pop   eax
+        sPop     eax
         add     [rStackPtr], CELL_SZ
         mov     edx, [rStackPtr]
         mov     [edx], eax
@@ -151,7 +151,7 @@ rStackTo: ; ( N-- )
 rStackFrom: ; ( --N )
         call    checkRStack
         mov     eax, [edx]
-        m_push  eax
+        sPush    eax
         sub     [rStackPtr], CELL_SZ
         ret
 
@@ -159,13 +159,13 @@ rStackFrom: ; ( --N )
 rStackFetch: ; ( --N )
         call    checkRStack
         mov     eax, [edx]
-        m_push  eax
+        sPush   eax
         ret
 
 ; ******************************************************************************
 rStackStore: ; ( N-- )
         call    checkRStack
-        m_pop   eax
+        sPop    eax
         mov     [edx], eax
         ret
 
@@ -173,7 +173,7 @@ rStackStore: ; ( N-- )
 doExecute: ; ( xt-- )
         cmp     TOS, primEnd
         jg      rStackTo
-        m_pop   eax
+        sPop    eax
         jmp     eax
 
 ; ******************************************************************************
@@ -215,51 +215,51 @@ iToA:   mov     ecx, buf3+63  ; output string start
 .X:     ret
 
 ; ******************************************************************************
-doItoA: m_pop   eax
+doItoA: sPop    eax
         call    iToA
-        m_push  ecx
-        m_push  ebx
+        sPush   ecx
+        sPush   ebx
         ret
 
 ; ******************************************************************************
 JmpA:   lodsd
-doJ:    mov     esi, eax
+doJmp:  mov    esi, eax
         ret
 
 ; ******************************************************************************
-JmpZ:   m_pop  ebx
+JmpZ:   sPop   ebx
         lodsd
         test   ebx, ebx
-        jz     doJ
+        jz     doJmp
         ret
 
 ; ******************************************************************************
-JmpNZ:  m_pop  ebx
+JmpNZ:  sPop   ebx
         lodsd
         test   ebx, ebx
-        jnz    doJ
+        jnz    doJmp
         ret
 
 ; ******************************************************************************
 NJmpZ:  lodsd
         test   TOS, TOS
-        jz     doJ
+        jz     doJmp
         ret
 
 ; ******************************************************************************
 NJmpNZ: lodsd
         test   TOS, TOS
-        jnz    doJ
+        jnz    doJmp
         ret
 
 ; ******************************************************************************
-Fetch: getTOS   edx
-         setTOS   [edx]
-         ret
+Fetch:  getTOS   edx
+        setTOS   [edx]
+        ret
 
 ; ******************************************************************************
-doStore: m_pop  edx
-         m_pop  eax
+doStore: sPop   edx
+         sPop   eax
          mov    [edx], eax
          ret
 
@@ -270,8 +270,8 @@ CFetch: xor     eax, eax
         ret
 
 ; ******************************************************************************
-CStore: m_pop edx
-        m_pop   eax
+CStore: sPop    edx
+        sPop    eax
         mov     BYTE [edx], al
         ret
 
@@ -317,7 +317,7 @@ doNumQ: ; ( addr--num 1 | 0 )
 .NO:    setTOS  0
         ret
 .YES:   setTOS  edx
-        m_push  1
+        sPush   1
         ret
 
 ; ******************************************************************************
@@ -339,7 +339,7 @@ betF:   mov     bl, 0
 doFor:  add     [lStackPtr], CELL_SZ*3
         mov     edx, [lStackPtr]
         mov     [edx], DWORD 0
-        m_pop   eax
+        sPop    eax
         mov     [edx-CELL_SZ], eax
         mov     [edx-(CELL_SZ*2)], esi
         ret
@@ -347,7 +347,7 @@ doFor:  add     [lStackPtr], CELL_SZ*3
 ; ******************************************************************************
 doI:    mov     edx, [lStackPtr]
         mov     eax, [edx]
-        m_push  eax
+        sPush   eax
         ret
 
 ; ******************************************************************************
@@ -375,44 +375,49 @@ match =WINDOWS, FOR_OS { include 'io-win.asm' }
 match =LINUX,   FOR_OS { include 'io-lin.asm' }
 
 ; ******************************************************************************
-CELL:   m_push  CELL_SZ
+CELL:   sPush   CELL_SZ
         ret
 
 ; ******************************************************************************
-CELLS:  m_push  CELL_SZ
-MULT:   m_pop   eax
+CELL1:  add     TOS, CELL_SZ
+        ret
+
+; ******************************************************************************
+CELLS:  sPush    CELL_SZ
+MULT:   sPop     eax
         imul    TOS, eax
         ret
 
 ; ******************************************************************************
-MINUS:  m_pop   eax
+MINUS:  sPop     eax
         sub     TOS, eax
         ret
 
 ; ******************************************************************************
-PLUS:   m_pop   eax
+PLUS:   sPop     eax
         add     TOS, eax
         ret
 
 ; ******************************************************************************
-doSLMod: m_pop   ebx
-         cmp     ebx, 0
-         je      .X
-         m_pop   eax
-         mov     edx, 0
-         idiv    ebx
-         m_push  edx
-         m_push  eax
-.X:      ret
+doSLMod:
+        sPop    ebx
+        cmp    ebx, 0
+        je     .X
+        sPop    eax
+        mov    edx, 0
+        idiv   ebx
+        sPush   edx
+        sPush   eax
+.X:     ret
 
 ; ******************************************************************************
-doDiv:  m_pop   ebx
+doDiv:  sPop    ebx
         cmp     ebx, 0
         je      .X
-        m_pop   eax
+        sPop    eax
         mov     edx, 0
         idiv    ebx
-        m_push  eax
+        sPush   eax
 .X:     ret
 
 ; ******************************************************************************
@@ -431,17 +436,17 @@ doDec:  dec     TOS
         ret
 
 ; ******************************************************************************
-doAnd:  m_pop   eax
+doAnd:  sPop    eax
         and     TOS, eax
         ret
 
 ; ******************************************************************************
-doOr:   m_pop   eax
+doOr:   sPop    eax
         or      TOS, eax
         ret
 
 ; ******************************************************************************
-doXOR:  m_pop   eax
+doXOR:  sPop    eax
         xor     TOS, eax
         ret
 
@@ -462,19 +467,19 @@ doFalse: mov     TOS, 0
         ret
 
 ; ******************************************************************************
-doEQ:   m_pop   eax
+doEQ:   sPop    eax
         cmp     TOS, eax
         je      doTrue
         jmp     doFalse
 
 ; ******************************************************************************
-doLT:   m_pop   eax
+doLT:   sPop    eax
         cmp     TOS, eax
         jl      doTrue
         jmp     doFalse
 
 ; ******************************************************************************
-doGT:   m_pop   eax
+doGT:   sPop    eax
         cmp     TOS, eax
         jg      doTrue
         jmp     doFalse
@@ -484,10 +489,10 @@ doDot:  push    eax
         push    ebx
         push    ecx
         push    edx
-        m_pop   eax
+        sPop    eax
         call    iToA
-        m_push  ecx
-        m_push  ebx
+        sPush   ecx
+        sPush   ebx
         call    TYPE
         pop     edx
         pop     ecx
@@ -496,20 +501,20 @@ doDot:  push    eax
         ret
 
 ; ******************************************************************************
-doDotS: m_push  '('
+doDotS: sPush   '('
         call    printChar
         mov     eax, dStack+CELL_SZ
 .L:     cmp     eax, STKP
         jg      .X
-        m_push  [eax]
+        sPush   [eax]
         call    doDot
-        m_push  32
+        sPush   32
         call    printChar
         add     eax, CELL_SZ
         jmp     .L
 .X:     call    doDup
         call    doDot
-        m_push  ')'
+        sPush   ')'
         call    EMIT
         ret
 
@@ -528,7 +533,7 @@ printChar:
 
 ; ******************************************************************************
 doDup:  getTOS  eax
-        m_push  eax
+        sPush   eax
         ret
 
 ; ******************************************************************************
@@ -539,7 +544,7 @@ SWAP:   get2ND    eax
 
 ; ******************************************************************************
 doOver: get2ND      eax
-        m_push      eax
+        sPush       eax
         ret
 
 ; ******************************************************************************
@@ -551,14 +556,14 @@ doDrop: mov     TOS, [STKP]
 .X:     ret
 
 ; ******************************************************************************
-doLen:  m_pop   edx             ; ( addr--len )
+doLen:  sPop    edx             ; ( addr--len )
         xor     ecx, ecx
 .L:     cmp     [edx], BYTE 0
         je      .X
         inc     ecx
         inc     edx
         jmp     .L
-.X:     m_push  ecx
+.X:     sPush   ecx
         ret
 
 ; ******************************************************************************
@@ -578,8 +583,8 @@ skipWS: mov     edx, [ToIn]     ; Updates ToIn to point to the next non-whitespa
 ; ******************************************************************************
 nextWd: call    skipWS          ; ( --addr len )
         mov     ebx, buf2
-        m_push  ebx
-        m_push  0
+        sPush   ebx
+        sPush   0
 .L:     mov     al, [edx]
         cmp     al, 32
         jle     .X
@@ -595,9 +600,9 @@ nextWd: call    skipWS          ; ( --addr len )
 
 ; ******************************************************************************
 doStrEq:       ; ( str1 str2--fl )
-        m_pop   ecx
-        m_pop   edx
-        m_push  0               ; Default to NOT equal
+        sPop    ecx
+        sPop    edx
+        sPush   0               ; Default to NOT equal
 .LP:    mov     al, [ecx]
         cmp     al, [edx]
         jne     .X
@@ -619,9 +624,9 @@ toLower: cmp    al, 'A'
 
 ; ******************************************************************************
 doStrEqI:      ; ( str1 str2--fl )
-        m_pop   ecx
-        m_pop   edx
-        m_push  0               ; Default to NOT equal
+        sPop    ecx
+        sPop    edx
+        sPush   0               ; Default to NOT equal
 .LP:    mov     al, [ecx]
         call    toLower
         mov     ah, al
@@ -639,12 +644,12 @@ doStrEqI:      ; ( str1 str2--fl )
 
 ; ******************************************************************************
 Lit:  lodsd
-        m_push eax
+        sPush eax
         ret
 
 ; ******************************************************************************
 doComma: ; ( n-- )
-        m_pop   eax
+        sPop    eax
         mov     edx, [HERE]
         mov     [edx], eax
         add     edx, CELL_SZ
@@ -653,11 +658,75 @@ doComma: ; ( n-- )
 
 ; ******************************************************************************
 doCComma: ; ( n-- )
-        m_pop   eax
+        sPop    eax
         mov     edx, [HERE]
         mov     [edx], al
         inc     edx
         mov     [HERE], edx
+        ret
+
+; ******************************************************************************
+AVAL:   sPush   [AVAR]
+        ret
+
+; ******************************************************************************
+ASET:   sPop    [AVAR]
+        ret
+
+; ******************************************************************************
+AFET:   mov     eax, [AVAR]
+        sPush   [eax]
+        ret
+
+; ******************************************************************************
+AFET1:  mov     eax, [AVAR]
+        sPush   [eax]
+        add     DWORD [AVAR], CELL_SZ
+        ret
+
+; ******************************************************************************
+ASTO:   sPop    ebx
+        mov     eax, [AVAR]
+        mov     [eax], ebx
+        ret
+
+; ******************************************************************************
+ASTO1:  sPop    ebx
+        mov     eax, [AVAR]
+        mov     [eax], ebx
+        add     DWORD [AVAR], CELL_SZ
+        ret
+
+; ******************************************************************************
+BVAL:   sPush   [BVAR]
+        ret
+
+; ******************************************************************************
+BSET:   sPop    [BVAR]
+        ret
+
+; ******************************************************************************
+BFET:   mov     eax, [BVAR]
+        sPush   [eax]
+        ret
+
+; ******************************************************************************
+BFET1:  mov     eax, [BVAR]
+        sPush   [eax]
+        add     DWORD [BVAR], CELL_SZ
+        ret
+
+; ******************************************************************************
+BSTO:   sPop    ebx
+        mov     eax, [BVAR]
+        mov     [eax], ebx
+        ret
+
+; ******************************************************************************
+BSTO1:  sPop    ebx
+        mov     eax, [BVAR]
+        mov     [eax], ebx
+        add     DWORD [BVAR], CELL_SZ
         ret
 
 ; ******************************************************************************
@@ -692,6 +761,8 @@ VHERE       dd  THE_VARS
 LAST        dd  tagLast
 BASE        dd  10
 HERE1       dd  ?
+AVAR        dd  0
+BVAR        dd  0
 TIB         dd  TIB_SZ dup 0
 ToIn        dd  ?
 
@@ -799,7 +870,8 @@ THE_DICT:
         dictEntry xCR,       0, 2, "CR",     tag0080
         dictEntry xWords,    0, 5, "WORDS",  tag0090
         dictEntry CELL,      0, 4, "CELL",   tag0100
-        dictEntry CELLS,     0, 4, "CELLS",  tag0101
+        dictEntry CELL1,     0, 5, "CELL+",  tag0101
+        dictEntry CELLS,     0, 4, "CELLS",  tag0102
         dictEntry doItoA,    0, 3, "I>A",    tag0110
         dictEntry xHere,     0, 4, "HERE",   tag0120
         dictEntry xHA,       0, 2, "HA",     tag0121
@@ -829,7 +901,19 @@ THE_DICT:
         dictEntry doDiv,     0, 1, "/",      tag0235
         dictEntry doSLMod,   0, 4, "/MOD",   tag0236
         dictEntry doMod,     0, 3, "MOD",    tag0237
-        dictEntry SWAP,      0, 4, "SWAP",   tag240
+        dictEntry SWAP,      0, 4, "SWAP",   tag0240
+        dictEntry AVAL,      0, 2, "@A",     tag0250
+        dictEntry ASET,      0, 2, "!A",     tag0251
+        dictEntry AFET,      0, 2, "A@",     tag0252
+        dictEntry AFET1,     0, 3, "A@+",    tag0253
+        dictEntry ASTO,      0, 2, "A!",     tag0254
+        dictEntry ASTO1,     0, 3, "A!+",    tag0255
+        dictEntry BVAL,      0, 2, "@B",     tag0260
+        dictEntry BSET,      0, 2, "!B",     tag0261
+        dictEntry BFET,      0, 2, "B@",     tag0262
+        dictEntry BFET1,     0, 3, "B@+",    tag0263
+        dictEntry BSTO,      0, 2, "B!",     tag0264
+        dictEntry BSTO1,     0, 3, "B!+",    tag0265
 ; TODO add more built-in dictionary entries here
         dictEntry doDup,     0, 3, "DUP",    tagLast
         rb  DICT_SZ

@@ -15,46 +15,46 @@ doBye:  invoke  ExitProcess, 0
 
 ; **********************************************************************
 doTimer: ; ( --N )
-        invoke GetTickCount
-        m_push  eax
+        invoke  GetTickCount
+        sPush   eax
         ret
 
 ; **********************************************************************
 EMIT: ; ( ch-- )
-        m_pop   eax
+        sPop    eax
         mov     [buf1], al
         invoke  WriteConsole, [hStdOut], buf1, 1, NULL, NULL
         ret
 
 ; **********************************************************************
 TYPE: ;  ( addr len-- )
-        m_pop   eax             ; Len
-        m_pop   ebx             ; Addr
+        sPop    eax             ; Len
+        sPop    ebx             ; Addr
         invoke  WriteConsole, [hStdOut], ebx, eax, NULL, NULL
         ret
 
 ; **********************************************************************
 doReadL: ; ( addr sz--num )
-        m_pop  edx              ; buffer size
-        getTOS ecx              ; buffer
-        invoke ReadConsole, [hStdIn], ecx, edx, bytesRead, 0
-        mov    eax, [bytesRead]
-        dec    eax              ; Remove the <LF>
-        dec    eax              ; Remove the <CR>
-        getTOS ecx
-        mov    [ecx+eax], BYTE 0
-        setTOS eax
+        sPop    edx              ; buffer size
+        getTOS  ecx              ; buffer
+        invoke  ReadConsole, [hStdIn], ecx, edx, bytesRead, 0
+        mov     eax, [bytesRead]
+        dec     eax              ; Remove the <LF>
+        dec     eax              ; Remove the <CR>
+        getTOS  ecx
+        mov     [ecx+eax], BYTE 0
+        setTOS  eax
         ret
 
 ; **********************************************************************
 doQKey: ; ( --flg )
-        invoke _kbhit
-        m_push  eax
+        invoke  _kbhit
+        sPush   eax
         ret
 
 ; **********************************************************************
 doKey: ; ( --ch )
         invoke  _getch
-        m_push  eax
+        sPush   eax
         ret
 

@@ -11,12 +11,12 @@ doBye:  mov     eax,1           ; system call number (sys_exit)
 
 ; **********************************************************************
 doTimer: ; invoke LinuxTimer
-        m_push  eax
+        sPush   eax
         ret
 
 ; **********************************************************************
 EMIT:   push    eax
-        m_pop   eax             ; ( ch-- )
+        sPop    eax             ; ( ch-- )
         mov     [buf1], al      ; put char in message
         mov     eax,4           ; system call number (sys_write)
         mov     ebx,1           ; file descriptor (stdout)
@@ -28,8 +28,8 @@ EMIT:   push    eax
 
 ; **********************************************************************
 TYPE:   ; ( string len-- )
-        m_pop   edx             ; Len
-        m_pop   ecx             ; String
+        sPop    edx             ; Len
+        sPop    ecx             ; String
         mov     eax,4           ; system call number (sys_write)
         mov     ebx,1           ; file descriptor (stdout)
         int     0x80
@@ -37,26 +37,26 @@ TYPE:   ; ( string len-- )
 
 ; **********************************************************************
 doReadL: ; ( addr sz--num )
-        m_pop edx               ; buffer size ( buf sz--num )
-        m_pop  ecx              ; buffer
+        sPop   edx               ; buffer size ( buf sz--num )
+        sPop   ecx              ; buffer
         mov    ebx, 0           ; stdin
         mov    eax, 3           ; sys_read
         push   ecx
         int    0x80
         pop    ecx
         dec    eax              ; Remove the <LF>
-        m_push eax
+        sPush  eax
         mov    [ecx+eax], BYTE 0
         ret
 
 ; **********************************************************************
 doQKey: ; ( --n ) - TODO
-        m_push 0
+        sPush  0
         ret
 
 ; **********************************************************************
 doKey:  ; ( --fl ) - TODO
-        m_push 0
+        sPush  0
         ret
 
 ; **********************************************************************
