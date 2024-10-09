@@ -56,6 +56,16 @@ macro sPush val {
        setTOS val
 }
 
+macro dbgPC ch {
+        sPush ch
+        call printChar
+}
+
+macro dbgNum n {
+        sPush n
+        call doDot
+}
+
 ; ******************************************************************************
 macro sPop val {
        getTOS val
@@ -278,10 +288,11 @@ CStore: sPop    edx
 ; ******************************************************************************
 ; A dictionary entry looks like this:
 ; Next/4, XT/4, Flags/1, Len/1, Name/?, NULL/1
-addWord: ; ( str-- )
-        call    _DUP                    ; ( str str )
-        call    doLen                   ; ( str len )
+addWord: ; ( str len-- )
+        test    TOS, TOS
+        jz      .NO
         getTOS  eax
+        dbgPC   'A'
         add     eax, (2*CELL_SZ)+3
         mov     edx, [LAST]
         sub     edx, eax
@@ -302,6 +313,10 @@ addWord: ; ( str-- )
         call    SWAP                    ; ( dst str )
         pop     edx                     ; Set LAST to the new value
         mov     [LAST], edx
+        dbgPC   'Z'
+        ret
+.NO:    call    DROP                    ; Length was 0
+        call    DROP
         ret
 
 ; ******************************************************************************
@@ -570,7 +585,7 @@ SWAP:   get2ND    eax
         ret
 
 ; ******************************************************************************
-doOver: get2ND      eax
+OVER:   get2ND      eax
         sPush       eax
         ret
 
@@ -799,6 +814,7 @@ HERE        dd  THE_CODE
 VHERE       dd  THE_VARS
 LAST        dd  tagLast
 BASE        dd  10
+STATE       dd  0
 HERE1       dd  ?
 AVAR        dd  0
 BVAR        dd  0
@@ -833,8 +849,8 @@ xIntDictQ       dd Lit, buf2, xFind, JmpZ, xIntERR                      ; Is it 
                 ; dd xNum+'C', EMIT, xNum+'-', EMIT, _DUP, xDot        ; *** temp ***
                 dd xExecute, JmpA, xIntLoop
                 dd COMMA, JmpA, xIntLoop
-xIntImmed       dd xNum+'I', EMIT, xNum+'-', EMIT, doDot
-                dd JmpA, xIntLoop
+xIntImmed       dd xNum+'I', EMIT, xNum+'-', EMIT, _DUP, doDot
+                dd doExecute, JmpA, xIntLoop
 xIntERR         dd xNum+'?', xNum+'?', EMIT, EMIT, EXIT
 xExecute    dd doExecute, EXIT
 xCompNum    dd EXIT
@@ -866,6 +882,7 @@ xHere       dd xHA, Fetch, EXIT
 xLA         dd Lit, LAST, EXIT
 xLast       dd xLA, Fetch, EXIT
 xBASE       dd Lit, BASE, EXIT
+xState      dd Lit, STATE, EXIT
 xDot        dd doDot, xSpace, EXIT
 xOK         dd Lit, okStr, xNum+3, TYPE, xCR, EXIT
 xTIB        dd Lit, TIB, EXIT
@@ -873,7 +890,7 @@ xTIBSZ      dd xNum+TIB_SZ, EXIT
 xToIn       dd Lit, ToIn, EXIT
 xAccept     dd doReadL, EXIT
 xFind      dd xLast                                                 ; ( str--xt fl 1 | 0 )
-xFindLoop       dd doOver, doOver, xDeName
+xFindLoop       dd OVER, OVER, xDeName
                 dd doStrEqI, JmpZ, xFindNext
                 dd SWAP, DROP, _DUP, xDeXT, SWAP, xDeFlags   ; FOUND!
                 dd xNum+1, EXIT
@@ -881,6 +898,8 @@ xFindNext       dd xDeNext, _DUP, JmpNZ, xFindLoop
                 dd DROP, DROP, xNum, EXIT                     ; NOT Found!
 xBench      dd doTimer, Lit, 500000000, _DUP, xDot, doFor, doNext
             dd doTimer, SWAP, MINUS, xDot, EXIT
+xColon      dd nextWd, addWord, xNum+1, xState, doStore, EXIT
+xSemi       dd Lit, EXIT, COMMA, xNum, xState, doStore, EXIT
 xIf         dd Lit, JmpZ,   COMMA, xHere, xNum, COMMA, EXIT
 xIf0        dd Lit, JmpNZ,  COMMA, xHere, xNum, COMMA, EXIT
 xNIf        dd Lit, NJmpZ,  COMMA, xHere, xNum, COMMA, EXIT
@@ -934,7 +953,9 @@ THE_DICT:
         dictEntry xThen,     1, 4, "THEN",   tag0205
         dictEntry EMIT,      0, 4, "EMIT",   tag0210
         dictEntry TYPE,      0, 4, "TYPE",   tag0211
-        dictEntry EXIT,      0, 4, "EXIT",   tag0220
+        dictEntry xColon,    0, 1, ":",      tag0220
+        dictEntry xSemi,     1, 1, ";",      tag0221
+        dictEntry EXIT,      0, 4, "EXIT",   tag0222
         dictEntry PLUS,      0, 1, "+",      tag0231
         dictEntry MINUS,     0, 1, "-",      tag0232
         dictEntry MULT,      0, 1, "*",      tag0234
@@ -942,6 +963,7 @@ THE_DICT:
         dictEntry doSLMod,   0, 4, "/MOD",   tag0236
         dictEntry doMod,     0, 3, "MOD",    tag0237
         dictEntry SWAP,      0, 4, "SWAP",   tag0240
+        dictEntry OVER,      0, 4, "OVER",   tag0241
         dictEntry AVAL,      0, 2, "@A",     tag0250
         dictEntry ASET,      0, 2, "!A",     tag0251
         dictEntry AFET,      0, 2, "A@",     tag0252
