@@ -37,7 +37,7 @@ TYPE:   ; ( string len-- )
 
 ; **********************************************************************
 doReadL: ; ( addr sz--num )
-        sPop   edx               ; buffer size ( buf sz--num )
+        sPop   edx              ; buffer size ( buf sz--num )
         sPop   ecx              ; buffer
         mov    ebx, 0           ; stdin
         mov    eax, 3           ; sys_read
