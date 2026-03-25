@@ -14,28 +14,29 @@ entry main
 ; STKP = rbp         Data stack pointer (callee-saved)
 ; PCIP = r15         Forth instruction pointer (callee-saved)
 ; RSP  = r13         Return stack pointer (callee-saved)
-; Scratch: rbx, rcx, rdx, rsi, rdi, r8-r12, r14
+; TSP  = r14         Temp/locals stack pointer (callee-saved)
+; Scratch: rbx, rcx, rdx, rsi, rdi, r8-r12
 
 ; ******************************************************************************
 ; Constants
 ; ******************************************************************************
 CELL_SZ = 8
-CODE_SZ = 64*1024
-DICT_SZ = 64*1024
-VARS_SZ = 256*1024
+CODE_SZ = 8*1024*1024
+DICT_SZ = 1*1024*1024
 TIB_SZ  = 128
 
 ; Numeric literal encoding (high bit tagging for speed)
 xNum    = 0x8000000000000000
 numMask = 0x7FFFFFFFFFFFFFFF
 
-; Dictionary entry layout:
-; Next/8, XT/8, Flags/1, Len/1, Name/?, NULL/1
-DE_NEXT_OFFSET  = 0
-DE_XT_OFFSET    = 8
-DE_FLAGS_OFFSET = 16
-DE_LEN_OFFSET   = 17
-DE_NAME_OFFSET  = 18
+; Dictionary entry layout (fixed 32 bytes, grows downward):
+; XT/8, Flags/1, Len/1, Name/22 (null-terminated, max 21 chars)
+DE_SIZE         = 32
+DE_XT_OFFSET    = 0
+DE_FLAGS_OFFSET = 8
+DE_LEN_OFFSET   = 9
+DE_NAME_OFFSET  = 10
+DE_MAX_NAME     = 21
 
 ; ******************************************************************************
 ; Macros
@@ -52,6 +53,7 @@ macro sPop reg {
     sub     rbp, CELL_SZ
 }
 
+; ******************************************************************************
 macro rPush val {
     add     r13, CELL_SZ
     mov     [r13], val
@@ -74,32 +76,41 @@ main:
     ; Initialize stacks
     mov     r13, rStack         ; Return stack
     mov     rbp, dStack         ; Data stack
+    mov     r14, tStack         ; Temp/locals stack
     xor     rax, rax            ; TOS = 0
+
+    ; Initialize dictionary with primitives
+    call    initDict
+
     mov     r15, THE_ROM        ; Instruction pointer
     
     ; Jump to interpreter
-    jmp     interpret
+    call    interpret
+    call    p_BYE
 
 ; ******************************************************************************
 ; Inner Interpreter (threaded code)
 ; ******************************************************************************
+primDispatch:
+    call    rbx                 ; Execute primitive, fall through to interpret
+
 interpret:
+    test    r15, r15            ; Check for end of code (NULL)
+    jz      .done
     mov     rbx, [r15]          ; Fetch next instruction
     add     r15, CELL_SZ        ; Advance IP
-    
-    cmp     rbx, primEnd        ; Is it a primitive?
-    jl      .primitive
-    
-    test    rbx, rbx            ; Is high bit set?
-    js      .number             ; Yes = tagged number literal
-    
-    ; It's a colon definition - nest
-    rPush   r15                 ; Save current IP
-    mov     r15, rbx            ; Jump to definition
-    jmp     interpret
 
-.primitive:
-    call    rbx                 ; Execute primitive
+    cmp     rbx, primEnd        ; Primitive? (30% - most common non-XT exit)
+    jb      primDispatch
+
+    js      .number             ; Literal? bit63 set (10%)
+
+    ; Colon definition (60% = 50% XT + 10% TCO) - falls through
+    cmp     qword [r15], p_EXIT ; tail call?
+    je      .tail
+    rPush   r15                 ; Save current IP
+.tail:
+    mov     r15, rbx            ; Jump to definition
     jmp     interpret
 
 .number:
@@ -107,27 +118,32 @@ interpret:
     sPush   rbx                 ; Push to stack
     jmp     interpret
 
+.done:      
+    mov     r13, rStack         ; Reset return stack
+    ret
+
 ; ******************************************************************************
 ; Primitives
 ; ******************************************************************************
 
 ; EXIT - Return from colon definition
-pEXIT:
+p_EXIT:
     cmp     r13, rStack         ; Check return stack underflow
-    jle     .underflow
+    jng     .underflow
     rPop    r15                 ; Restore IP
     ret
 .underflow:
-    ; Return stack underflow - reset to warm start
-    mov     r15, xWarm
+    ; Return stack underflow
+    mov     r13, rStack
+    xor     r15, r15            ; NULL IP to trigger exit
     ret
 
 ; Stack manipulation
-pDUP:
+p_DUP:
     sPush   rax
     ret
 
-pDROP:
+p_DROP:
     mov     rax, [rbp]
     sub     rbp, CELL_SZ
     cmp     rbp, dStack
@@ -136,34 +152,34 @@ pDROP:
 .ok:
     ret
 
-pSWAP:
+p_SWAP:
     mov     rbx, [rbp]
     mov     [rbp], rax
     mov     rax, rbx
     ret
 
-pOVER:
+p_OVER:
     mov     rbx, [rbp]
     sPush   rbx
     ret
 
 ; Arithmetic
-pPLUS:
+p_PLUS:
     sPop    rbx
     add     rax, rbx
     ret
 
-pMINUS:
+p_MINUS:
     sPop    rbx
     sub     rax, rbx
     ret
 
-pMULT:
+p_MULT:
     sPop    rbx
     imul    rax, rbx
     ret
 
-pDIVMOD:
+p_DIVMOD:
     sPop    rbx                 ; divisor
     cmp     rbx, 0
     je      .zero
@@ -177,15 +193,15 @@ pDIVMOD:
 .zero:
     ret
 
-pINC:
+p_INC:
     inc     rax
     ret
 
-pDEC:
+p_DEC:
     dec     rax
     ret
 
-pNEG:
+p_NEG:
     neg     rax
     ret
 
@@ -205,26 +221,26 @@ p_XOR:
     xor     rax, rbx
     ret
 
-pINVERT:
+p_INVERT:
     not     rax
     ret
 
 ; Comparison
-pEQUAL:
+p_EQUAL:
     sPop    rbx
     cmp     rax, rbx
     mov     rax, 0
     sete    al
     ret
 
-pLESS:
+p_LESS:
     sPop    rbx
     cmp     rax, rbx
     mov     rax, 0
     setl    al
     ret
 
-pGREATER:
+p_GREATER:
     sPop    rbx
     cmp     rax, rbx
     mov     rax, 0
@@ -232,51 +248,51 @@ pGREATER:
     ret
 
 ; Memory access
-pFETCH:
+p_FETCH:
     mov     rax, [rax]
     ret
 
-pSTORE:
+p_STORE:
     sPop    rbx                 ; address
     sPop    rcx                 ; value
     mov     [rbx], rcx
     ret
 
-pCFETCH:
+p_CFETCH:
     movzx   rax, byte [rax]
     ret
 
-pCSTORE:
+p_CSTORE:
     sPop    rbx                 ; address
     sPop    rcx                 ; value
     mov     [rbx], cl
     ret
 
 ; Return stack
-pTOR:
+p_TOR:
     sPop    rbx
     rPush   rbx
     ret
 
-pFROMR:
+p_FROMR:
     rPop    rbx
     sPush   rbx
     ret
 
-pRFETCH:
+p_RFETCH:
     mov     rbx, [r13]
     sPush   rbx
     ret
 
 ; Literals
-pLIT:
+p_LIT:
     mov     rbx, [r15]
     add     r15, CELL_SZ
     sPush   rbx
     ret
 
 ; I/O
-pEMIT:
+p_EMIT:
     sPop    rbx
     mov     [charBuf], bl
     
@@ -287,7 +303,7 @@ pEMIT:
     syscall
     ret
 
-pTYPE:
+p_TYPE:
     sPop    rdx                 ; length
     sPop    rsi                 ; address
     
@@ -296,7 +312,7 @@ pTYPE:
     syscall
     ret
 
-pKEY:
+p_KEY:
     mov     rax, 0              ; sys_read
     xor     rdi, rdi            ; stdin
     mov     rsi, charBuf
@@ -307,13 +323,13 @@ pKEY:
     sPush   rax
     ret
 
-; Dictionary
-pHERE:
+; Code pointer
+p_HERE:
     mov     rbx, [HERE]
     sPush   rbx
     ret
 
-pCOMMA:
+p_COMMA:
     sPop    rbx
     mov     rcx, [HERE]
     mov     [rcx], rbx
@@ -321,151 +337,61 @@ pCOMMA:
     mov     [HERE], rcx
     ret
 
-pCCOMMA:
-    sPop    rbx
-    mov     rcx, [HERE]
-    mov     [rcx], bl
-    inc     rcx
-    mov     [HERE], rcx
+; lit, ( n -- )  compile n as a literal into HERE
+; if bit63 clear: tag n and compile as single cell
+; if bit63 set:   compile p_LIT + n (2 cells)
+p_LITCOMMA:
+    test    rax, rax
+    js      .twocell
+    bts     rax, 63             ; tag TOS in place
+    jmp     p_COMMA             ; tail call
+.twocell:
+    sPop    rbx                 ; save n
+    sPush   p_LIT
+    call    p_COMMA
+    sPush   rbx
+    call    p_COMMA
     ret
 
-pLAST:
+; Dictionary
+p_LAST:
     mov     rbx, [LAST]
     sPush   rbx
     ret
 
-pBASE:
+p_BASE:
     mov     rbx, [BASE]
     sPush   rbx
     ret
 
+; Add word to dictionary ( s1 -- )
+; Sets XT=HERE, delegates to addDictEntry
+p_ADDDICT:
+    sPop    rsi                 ; rsi = name string
+    mov     rdi, [HERE]         ; rdi = XT (current HERE)
+    jmp     addDictEntry        ; tail call - addDictEntry will ret
+
 ; Control flow
-pBRANCH:
+p_BRANCH:
     mov     rbx, [r15]
     mov     r15, rbx
     ret
 
-pZBRANCH:
+p_ZBRANCH:
     sPop    rbx
     test    rbx, rbx
-    jz      pBRANCH
+    jz      p_BRANCH
     add     r15, CELL_SZ
     ret
 
-; Number output
-pDOT:
-    sPop    rcx                 ; number to print
-    
-    ; Convert number to string
-    mov     rsi, numBuf + 31
-    mov     byte [rsi], 0
-    mov     rbx, [BASE]
-    
-    test    rcx, rcx
-    jns     .positive
-    
-    neg     rcx
-    push    1                   ; negative flag
-    jmp     .convert
-    
-.positive:
-    push    0                   ; not negative
-
-.convert:
-    dec     rsi
-    mov     rax, rcx
-    xor     rdx, rdx
-    div     rbx
-    mov     rcx, rax
-    
-    add     dl, '0'
-    cmp     dl, '9'
-    jle     .digit
-    add     dl, 7
-.digit:
-    mov     [rsi], dl
-    
-    test    rcx, rcx
-    jnz     .convert
-    
-    pop     rbx                 ; get negative flag
-    test    rbx, rbx
-    jz      .print
-    
-    dec     rsi
-    mov     byte [rsi], '-'
-
-.print:
-    ; Calculate length
-    mov     rdx, numBuf + 31
-    sub     rdx, rsi
-    
-    ; Print the number
-    mov     rax, 1              ; sys_write
-    mov     rdi, 1              ; stdout
-    syscall
-    
-    ; Print space
-    mov     rax, 1
-    mov     rdi, 1
-    mov     rsi, spaceStr
-    mov     rdx, 1
-    syscall
-    ret
-
-pDOTS:
-    ; Print stack depth and contents
-    ; Save registers that syscalls clobber
-    push    r11
-    push    rcx
-    
-    mov     byte [charBuf], '('
-    mov     rax, 1
-    mov     rdi, 1
-    mov     rsi, charBuf
-    mov     rdx, 1
-    syscall
-    
-    ; Restore TOS from hardware stack
-    mov     rax, [rsp + 16]
-    
-    mov     rbx, dStack + CELL_SZ
-.loop:
-    cmp     rbx, rbp
-    jg      .done
-    
-    push    rbx                 ; Save loop counter
-    mov     rcx, [rbx]
-    sPush   rcx
-    call    pDOT
-    pop     rbx                 ; Restore loop counter
-    
-    add     rbx, CELL_SZ
-    jmp     .loop
-
-.done:
-    ; Print current TOS
-    call    pDOT
-    
-    mov     byte [charBuf], ')'
-    mov     rax, 1
-    mov     rdi, 1
-    mov     rsi, charBuf
-    mov     rdx, 1
-    syscall
-    
-    pop     rcx
-    pop     r11
-    ret
-
 ; System
-pBYE:
+p_BYE:
     mov     rax, 60             ; sys_exit
     xor     rdi, rdi            ; exit code 0
     syscall
     ret
 
-pCR:
+p_CR:
     mov     rax, 1
     mov     rdi, 1
     mov     rsi, crStr
@@ -473,21 +399,483 @@ pCR:
     syscall
     ret
 
+; Locals (temp stack) frame ops
+; r14 points directly to current frame's x slot; [r14]=x, [r14+8]=y, [r14+16]=z
+; Each frame is 3 cells (24 bytes); +L pushes a frame, -L pops one
+
+; +L - allocate locals frame ( -- )
+p_TSPI:
+    lea     rbx, [r14 + 3*CELL_SZ]
+    lea     rcx, [tStack + (64-3)*CELL_SZ]
+    cmp     rbx, rcx
+    jg      .overflow
+    mov     r14, rbx
+.overflow:
+    ret
+
+; -L - free locals frame ( -- )
+p_TSPD:
+    lea     rbx, [r14 - 3*CELL_SZ]
+    lea     rcx, [tStack]
+    cmp     rbx, rcx
+    jl      .underflow
+    mov     r14, rbx
+.underflow:
+    ret
+
+; x@ - fetch locals x slot ( -- x )
+p_XFET:
+    sPush   [r14]
+    ret
+
+; x! - store to locals x slot ( n -- )
+p_XSTO:
+    sPop    rbx
+    mov     [r14], rbx
+    ret
+
+; x@+ fetch locals x slot then increment ( -- x )
+p_XFETI:
+    mov     rbx, [r14]
+    inc     qword [r14]
+    sPush   rbx
+    ret
+
+; String length ( s1 -- n )
+p_SLEN:
+    xor     rcx, rcx
+.loop:
+    cmp     byte [rax + rcx], 0
+    je      .done
+    inc     rcx
+    jmp     .loop
+.done:
+    mov     rax, rcx
+    ret
+
+; Case-insensitive string equal ( s1 s2 -- f )  f: -1 equal, 0 not equal
+p_SEQI:
+    sPop    rsi                 ; s1
+    mov     rdi, rax            ; s2
+.loop:
+    movzx   eax, byte [rsi]
+    movzx   ecx, byte [rdi]
+    ; lowercase both: if 'A'-'Z' add 32
+    cmp     al, 'A'
+    jl      .noconv1
+    cmp     al, 'Z'
+    jg      .noconv1
+    add     al, 32
+.noconv1:
+    cmp     cl, 'A'
+    jl      .noconv2
+    cmp     cl, 'Z'
+    jg      .noconv2
+    add     cl, 32
+.noconv2:
+    cmp     al, cl
+    jne     .notequal
+    test    al, al              ; both zero = end of strings
+    jz      .equal
+    inc     rsi
+    inc     rdi
+    jmp     .loop
+.notequal:
+    xor     rax, rax
+    ret
+.equal:
+    mov     rax, -1
+    ret
+
+; >in ( -- a )  push address of the input pointer variable
+p_TOIN:
+    sPush   TOIN
+    ret
+
+; wd ( -- a )  push address of the word buffer
+p_WD:
+    sPush   WD
+    ret
+
+; next-word ( -- )  skip whitespace, parse next word from input into WD
+p_NEXTWORD:
+    mov     rsi, [TOIN]         ; rsi = current input pointer
+.skip:
+    cmp     byte [rsi], 0       ; end of input?
+    je      .empty
+    cmp     byte [rsi], 32      ; whitespace?
+    jg      .collect
+    inc     rsi
+    jmp     .skip
+.collect:
+    mov     rdi, WD
+    xor     rcx, rcx
+.charloop:
+    cmp     byte [rsi], 32      ; whitespace or null ends word
+    jle     .worddone
+    cmp     rcx, 31             ; cap at 31 chars
+    jge     .worddone
+    mov     al, [rsi]
+    mov     [rdi + rcx], al
+    inc     rsi
+    inc     rcx
+    jmp     .charloop
+.worddone:
+    mov     byte [rdi + rcx], 0 ; null terminate
+    mov     [TOIN], rsi         ; update input pointer
+    ret
+.empty:
+    mov     byte [WD], 0
+    ret
+
+; find ( s -- e )  search dictionary for s, return entry addr or 0
+; checks length before string compare to avoid unnecessary work
+p_FIND:
+    call    p_DUP               ; DUP s for length calculation
+    call    p_SLEN              ; ... ( s s -- s len )
+    sPop    rcx                 ; rcx = length
+    mov     rsi, rax            ; rsi = s
+    xor     rax, rax            ; default to not found (0)
+
+    mov     rbx, [LAST]         ; rbx = current entry
+    lea     rdx, [THE_DICT + DICT_SZ] ; rdx = end sentinel
+
+.entryloop:
+    cmp     rbx, rdx            ; past end of dictionary?
+    jge     .notfound
+
+    ; compare length first - fast reject
+    movzx   r8, byte [rbx + DE_LEN_OFFSET]
+    cmp     r8, rcx
+    jne     .next
+
+    ; use p_SEQI ( s1 s2 -- f ) for case-insensitive compare
+    push    rcx                 ; save length (p_SEQI clobbers rcx)
+    push    rsi                 ; save search string (p_SEQI clobbers rsi)
+    sPush   rsi                 ; s1 = search string
+    lea     rdi, [rbx + DE_NAME_OFFSET]
+    sPush   rdi                 ; s2 = entry name
+    call    p_SEQI              ; ... ( 0 s1 s2 -- 0 f )
+    sPop    r8                  ; f into r8, restore TOS (from 538)
+    pop     rsi                 ; restore search string
+    pop     rcx                 ; restore length
+
+    test    r8, r8
+    jnz     .found
+
+.next:
+    add     rbx, DE_SIZE
+    jmp     .entryloop
+
+.found:
+    mov     rax, rbx            ; return entry address
+    ret
+
+.notfound:
+    xor     rax, rax            ; not necessary: rax=0 restored by sPop r8, but kept for clarity
+    ret
+
+; is-num ( s -- n true | false )
+; parses s in BASE (% binary, # decimal, $ hex, 'x' char literal)
+; returns n 1 on success, 0 on failure
+p_ISNUM:
+    mov     rsi, rax            ; rsi = string pointer
+    mov     rbx, [BASE]         ; rbx = base
+    xor     rcx, rcx            ; rcx = accumulator
+    xor     rdx, rdx            ; rdx = isNeg flag
+
+    ; char literal 'x': w[0]==39, w[2]==39, w[3]==0
+    cmp     byte [rsi], 39
+    jne     .not_char
+    cmp     byte [rsi+2], 39
+    jne     .not_char
+    cmp     byte [rsi+3], 0
+    jne     .not_char
+    movzx   rax, byte [rsi+1]   ; push char value
+    sPush   1                   ; true
+    ret
+
+.not_char:
+    ; prefix overrides
+    cmp     byte [rsi], '%'
+    jne     .not_pct
+    mov     rbx, 2
+    inc     rsi
+    jmp     .after_prefix
+.not_pct:
+    cmp     byte [rsi], '#'
+    jne     .not_hash
+    mov     rbx, 10
+    inc     rsi
+    jmp     .after_prefix
+.not_hash:
+    cmp     byte [rsi], '$'
+    jne     .after_prefix
+    mov     rbx, 16
+    inc     rsi
+.after_prefix:
+    ; negative (base 10 only)
+    cmp     rbx, 10
+    jne     .after_neg
+    cmp     byte [rsi], '-'
+    jne     .after_neg
+    mov     rdx, 1
+    inc     rsi
+.after_neg:
+    ; must have at least one digit
+    cmp     byte [rsi], 0
+    je      .fail
+
+.digitloop:
+    movzx   r8, byte [rsi]
+    test    r8b, r8b
+    jz      .success
+    ; lowercase A-Z -> a-z
+    cmp     r8b, 'A'
+    jl      .no_lower
+    cmp     r8b, 'Z'
+    jg      .no_lower
+    add     r8b, 32
+.no_lower:
+    ; get digit value
+    cmp     r8b, '0'
+    jl      .fail
+    cmp     r8b, '9'
+    jle     .dec_digit
+    cmp     r8b, 'a'
+    jl      .fail
+    cmp     r8b, 'f'
+    jg      .fail
+    sub     r8b, 'a'-10         ; 'a'=10, 'b'=11 ...
+    jmp     .check_base
+.dec_digit:
+    sub     r8b, '0'
+.check_base:
+    cmp     r8, rbx
+    jge     .fail
+    imul    rcx, rbx
+    add     rcx, r8
+    inc     rsi
+    jmp     .digitloop
+
+.success:
+    test    rdx, rdx
+    jz      .positive
+    neg     rcx
+.positive:
+    mov     rax, rcx            ; TOS = n (replaces s)
+    sPush   1                   ; push true (saves n, TOS=1)
+    ret
+
+.fail:
+    xor     rax, rax            ; TOS = false
+    ret
+
+; immediate ( -- )  set IMMED flag on most recently defined word
+p_IMMEDIATE:
+    mov     rbx, [LAST]
+    or      byte [rbx + DE_FLAGS_OFFSET], 0x80
+    ret
+
 primEnd:
+
+; ******************************************************************************
+; Dictionary initialization
+; ******************************************************************************
+
+; addDictEntry(rsi=name, rdi=xt) - adds one dictionary entry to the dictionary
+; Uses registers only; does not touch the Forth data stack
+addDictEntry:
+    push    rdi                 ; save xt
+
+    ; Allocate entry growing downward
+    mov     rbx, [LAST]
+    sub     rbx, DE_SIZE
+    mov     [LAST], rbx
+
+    ; Zero the entry
+    xor     rcx, rcx
+    mov     qword [rbx],    rcx
+    mov     qword [rbx+8],  rcx
+    mov     qword [rbx+16], rcx
+    mov     qword [rbx+24], rcx
+
+    ; XT = given primitive address
+    pop     rdi
+    mov     [rbx + DE_XT_OFFSET], rdi
+
+    ; strlen(rsi) -> rdx, capped at DE_MAX_NAME
+    mov     rdx, rsi
+.lenloop:
+    cmp     byte [rdx], 0
+    je      .lendone
+    inc     rdx
+    jmp     .lenloop
+.lendone:
+    sub     rdx, rsi
+    cmp     rdx, DE_MAX_NAME
+    jle     .lenok
+    mov     rdx, DE_MAX_NAME
+.lenok:
+    mov     [rbx + DE_LEN_OFFSET], dl
+
+    ; copy name into entry
+    lea     rdi, [rbx + DE_NAME_OFFSET]
+    mov     rcx, rdx
+    rep movsb
+    ret
+
+; initDict - walk primTable, call addDictEntry for each {name,xt} pair
+initDict:
+    mov     r8, primTable
+.loop:
+    mov     rsi, [r8]           ; name ptr (0 = end of table)
+    test    rsi, rsi
+    jz      .done
+    mov     rdi, [r8+8]         ; primitive address
+    push    r8
+    call    addDictEntry
+    pop     r8
+    add     r8, 16
+    jmp     .loop
+.done:
+    ret
+
+primTable:
+    dq nm_EXIT,    p_EXIT
+    dq nm_DUP,     p_DUP
+    dq nm_DROP,    p_DROP
+    dq nm_SWAP,    p_SWAP
+    dq nm_OVER,    p_OVER
+    dq nm_PLUS,    p_PLUS
+    dq nm_MINUS,   p_MINUS
+    dq nm_MULT,    p_MULT
+    dq nm_DIVMOD,  p_DIVMOD
+    dq nm_INC,     p_INC
+    dq nm_DEC,     p_DEC
+    dq nm_NEG,     p_NEG
+    dq nm_AND,     p_AND
+    dq nm_OR,      p_OR
+    dq nm_XOR,     p_XOR
+    dq nm_INVERT,  p_INVERT
+    dq nm_EQUAL,   p_EQUAL
+    dq nm_LESS,    p_LESS
+    dq nm_GREATER, p_GREATER
+    dq nm_FETCH,   p_FETCH
+    dq nm_STORE,   p_STORE
+    dq nm_CFETCH,  p_CFETCH
+    dq nm_CSTORE,  p_CSTORE
+    dq nm_TOR,     p_TOR
+    dq nm_FROMR,   p_FROMR
+    dq nm_RFETCH,  p_RFETCH
+    dq nm_LIT,     p_LIT
+    dq nm_EMIT,    p_EMIT
+    dq nm_TYPE,    p_TYPE
+    dq nm_KEY,     p_KEY
+    dq nm_HERE,    p_HERE
+    dq nm_COMMA,   p_COMMA
+    dq nm_LITCOMMA, p_LITCOMMA
+    dq nm_LAST,    p_LAST
+    dq nm_BASE,    p_BASE
+    dq nm_BRANCH,  p_BRANCH
+    dq nm_ZBRANCH, p_ZBRANCH
+    dq nm_BYE,     p_BYE
+    dq nm_CR,      p_CR
+    dq nm_TSPI,    p_TSPI
+    dq nm_TSPD,    p_TSPD
+    dq nm_XFET,    p_XFET
+    dq nm_XSTO,    p_XSTO
+    dq nm_XFETI,   p_XFETI
+    dq nm_SLEN,    p_SLEN
+    dq nm_SEQI,    p_SEQI
+    dq nm_FIND,    p_FIND
+    dq nm_ADDDICT, p_ADDDICT
+    dq nm_TOIN,    p_TOIN
+    dq nm_WD,      p_WD
+    dq nm_NEXTWORD,p_NEXTWORD
+    dq nm_ISNUM,     p_ISNUM
+    dq nm_IMMEDIATE, p_IMMEDIATE
+    dq 0, 0                     ; end of table
 
 ; ******************************************************************************
 ; High-level definitions (threaded code)
 ; ******************************************************************************
 
-xCold:
-    dq pHERE, pDOT, pLAST, pDOT, pCR
-    dq xHello, pBYE
-    
-xWarm:
-    dq xHello, pBYE
-
 xHello:
-    dq pLIT, helloStr, pLIT, helloLen, pTYPE, pCR, pEXIT
+    dq p_LIT, helloStr, p_LIT, helloLen, p_TYPE, p_CR, p_EXIT, p_BYE
+
+; Test: print banner, look up "dup" in the dictionary, report found/not found
+findTest:
+    dq p_LIT, helloStr, p_LIT, helloLen, p_TYPE, p_CR
+    dq p_LIT, xtWord            ; ( -- s )
+    dq p_FIND                   ; ( s -- entry|0 )
+    dq p_DUP                    ; ( entry|0 entry|0 )
+    dq p_ZBRANCH, findTest_no
+    dq p_DROP
+    dq p_LIT, xtFoundStr, p_LIT, xtFoundLen, p_TYPE, p_CR
+    dq p_BRANCH, findTest_done
+findTest_no:
+    dq p_DROP
+    dq p_LIT, xtMissStr, p_LIT, xtMissLen, p_TYPE, p_CR
+findTest_done:
+    dq p_BYE
+
+xtWord      db  'dup', 0
+xtFoundStr  db  'find(dup): FOUND', 10
+xtFoundLen  =   $ - xtFoundStr
+xtMissStr   db  'find(dup): NOT FOUND', 10
+xtMissLen   =   $ - xtMissStr
+
+; Test is-num with: "42" (true), "abc" (false), "$1F" (true hex)
+numTest:
+    ; "42" -> expect true (n=42)
+    dq p_LIT, nt_42
+    dq p_ISNUM
+    dq p_ZBRANCH, numTest_f1
+    dq p_DROP                           ; discard n
+    dq p_LIT, nt_ok42s, p_LIT, nt_ok42l, p_TYPE, p_CR
+    dq p_BRANCH, numTest_n1
+numTest_f1:
+    dq p_LIT, nt_fail42s, p_LIT, nt_fail42l, p_TYPE, p_CR
+numTest_n1:
+    ; "abc" -> expect false
+    dq p_LIT, nt_abc
+    dq p_ISNUM
+    dq p_ZBRANCH, numTest_ok2           ; 0branch taken = false = expected
+    dq p_DROP
+    dq p_LIT, nt_failabcs, p_LIT, nt_failabcl, p_TYPE, p_CR
+    dq p_BRANCH, numTest_n2
+numTest_ok2:
+    dq p_LIT, nt_okabcs, p_LIT, nt_okabcl, p_TYPE, p_CR
+numTest_n2:
+    ; "$1F" -> expect true (n=31)
+    dq p_LIT, nt_hex
+    dq p_ISNUM
+    dq p_ZBRANCH, numTest_f3
+    dq p_DROP
+    dq p_LIT, nt_okhexs, p_LIT, nt_okhexl, p_TYPE, p_CR
+    dq p_BRANCH, numTest_n3
+numTest_f3:
+    dq p_LIT, nt_failhexs, p_LIT, nt_failhexl, p_TYPE, p_CR
+numTest_n3:
+    dq p_BYE
+
+nt_42       db '42', 0
+nt_abc      db 'abc', 0
+nt_hex      db '$1F', 0
+
+nt_ok42s    db 'is-num(42):  PASS', 10
+nt_ok42l    = $ - nt_ok42s
+nt_fail42s  db 'is-num(42):  FAIL', 10
+nt_fail42l  = $ - nt_fail42s
+nt_okabcs   db 'is-num(abc): PASS', 10
+nt_okabcl   = $ - nt_okabcs
+nt_failabcs db 'is-num(abc): FAIL', 10
+nt_failabcl = $ - nt_failabcs
+nt_okhexs   db 'is-num($1F): PASS', 10
+nt_okhexl   = $ - nt_okhexs
+nt_failhexs db 'is-num($1F): FAIL', 10
+nt_failhexl = $ - nt_failhexs
 
 ; ******************************************************************************
 ; Data segment
@@ -496,10 +884,12 @@ segment readable writable
 
 InitialRSP  dq 0
 HERE        dq THE_CODE
-LAST        dq 0
+LAST        dq THE_DICT + DICT_SZ
 BASE        dq 10
 STATE       dq 0
+TOIN        dq 0
 
+WD          rb 32
 charBuf     db 0
 spaceStr    db ' '
 crStr       db 10
@@ -508,8 +898,66 @@ numBuf      rb 32
 helloStr    db 'WC64 - 64-bit Forth System'
 helloLen    = $ - helloStr
 
+; Primitive names
+nm_EXIT     db 'exit',    0
+nm_DUP      db 'dup',     0
+nm_DROP     db 'drop',    0
+nm_SWAP     db 'swap',    0
+nm_OVER     db 'over',    0
+nm_PLUS     db '+',       0
+nm_MINUS    db '-',       0
+nm_MULT     db '*',       0
+nm_DIVMOD   db '/mod',    0
+nm_INC      db '1+',      0
+nm_DEC      db '1-',      0
+nm_NEG      db 'negate',  0
+nm_AND      db 'and',     0
+nm_OR       db 'or',      0
+nm_XOR      db 'xor',     0
+nm_INVERT   db 'invert',  0
+nm_EQUAL    db '=',       0
+nm_LESS     db '<',       0
+nm_GREATER  db '>',       0
+nm_FETCH    db '@',       0
+nm_STORE    db '!',       0
+nm_CFETCH   db 'c@',      0
+nm_CSTORE   db 'c!',      0
+nm_TOR      db '>r',      0
+nm_FROMR    db 'r>',      0
+nm_RFETCH   db 'r@',      0
+nm_LIT      db 'lit',     0
+nm_EMIT     db 'emit',    0
+nm_TYPE     db 'type',    0
+nm_KEY      db 'key',     0
+nm_HERE     db 'here',    0
+nm_COMMA    db ',',       0
+nm_LITCOMMA db 'lit,',    0
+nm_LAST     db 'last',    0
+nm_BASE     db 'base',    0
+nm_BRANCH   db 'branch',  0
+nm_ZBRANCH  db '0branch', 0
+nm_BYE      db 'bye',     0
+nm_CR       db 'cr',      0
+nm_TSPI     db '+L',      0
+nm_TSPD     db '-L',      0
+nm_XFET     db 'x@',      0
+nm_XSTO     db 'x!',      0
+nm_XFETI    db 'x@+',     0
+nm_SLEN     db 's-len',   0
+nm_SEQI     db 's-eqi',   0
+nm_FIND     db 'find',    0
+nm_ADDDICT  db 'add-word',0
+nm_TOIN     db '>in',     0
+nm_WD       db 'wd',      0
+nm_NEXTWORD db 'next-word',0
+nm_ISNUM    db 'is-num',   0
+nm_IMMEDIATE db 'immediate',0
+
+align 8
 dStack      rq 256
 rStack      rq 256
+tStack      rq 64
 
 THE_CODE:   rb CODE_SZ
-THE_ROM = xCold
+THE_DICT:   rb DICT_SZ
+THE_ROM = numTest

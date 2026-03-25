@@ -11,6 +11,14 @@ $(app): $(srcfiles) io-lin.asm
 	chmod +x $(app)
 	ls -l $(app)
 
+wc64: wc64.asm
+	$(COMP) $(opts) wc64.asm
+	chmod +x wc64
+	ls -l wc64
+
+r64: wc64
+	./wc64
+
 force: clean $(app)
 
 clean:
