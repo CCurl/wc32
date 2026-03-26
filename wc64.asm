@@ -441,6 +441,42 @@ p_XFETI:
     sPush   rbx
     ret
 
+; y@ - fetch locals y slot ( -- y )
+p_YFET:
+    sPush   [r14 + CELL_SZ]
+    ret
+
+; y! - store to locals y slot ( n -- )
+p_YSTO:
+    sPop    rbx
+    mov     [r14 + CELL_SZ], rbx
+    ret
+
+; y@+ fetch locals y slot then increment ( -- y )
+p_YFETI:
+    mov     rbx, [r14 + CELL_SZ]
+    inc     qword [r14 + CELL_SZ]
+    sPush   rbx
+    ret
+
+; z@ - fetch locals z slot ( -- z )
+p_ZFET:
+    sPush   [r14 + 2*CELL_SZ]
+    ret
+
+; z! - store to locals z slot ( n -- )
+p_ZSTO:
+    sPop    rbx
+    mov     [r14 + 2*CELL_SZ], rbx
+    ret
+
+; z@+ fetch locals z slot then increment ( -- z )
+p_ZFETI:
+    mov     rbx, [r14 + 2*CELL_SZ]
+    inc     qword [r14 + 2*CELL_SZ]
+    sPush   rbx
+    ret
+
 ; String length ( s1 -- n )
 p_SLEN:
     xor     rcx, rcx
@@ -822,6 +858,12 @@ primTable:
     dq nm_XFET,    p_XFET
     dq nm_XSTO,    p_XSTO
     dq nm_XFETI,   p_XFETI
+    dq nm_YFET,    p_YFET
+    dq nm_YSTO,    p_YSTO
+    dq nm_YFETI,   p_YFETI
+    dq nm_ZFET,    p_ZFET
+    dq nm_ZSTO,    p_ZSTO
+    dq nm_ZFETI,   p_ZFETI
     dq nm_SLEN,    p_SLEN
     dq nm_SEQI,    p_SEQI
     dq nm_FIND,    p_FIND
@@ -1041,6 +1083,12 @@ nm_TSPD     db '-L',      0
 nm_XFET     db 'x@',      0
 nm_XSTO     db 'x!',      0
 nm_XFETI    db 'x@+',     0
+nm_YFET     db 'y@',      0
+nm_YSTO     db 'y!',      0
+nm_YFETI    db 'y@+',     0
+nm_ZFET     db 'z@',      0
+nm_ZSTO     db 'z!',      0
+nm_ZFETI    db 'z@+',     0
 nm_SLEN     db 's-len',   0
 nm_SEQI     db 's-eqi',   0
 nm_FIND     db 'find',    0
