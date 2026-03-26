@@ -21,8 +21,8 @@ entry main
 ; Constants
 ; ******************************************************************************
 CELL_SZ = 8
-CODE_SZ = 8*1024*1024
-DICT_SZ = 1*1024*1024
+CODE_SZ = 15*1024*1024
+DICT_SZ =  1*1024*1024
 TIB_SZ  = 128
 
 ; Numeric literal encoding (high bit tagging for speed)
@@ -329,6 +329,10 @@ p_HERE:
     sPush   rbx
     ret
 
+p_MEM:
+    sPush   THE_CODE
+    ret
+
 p_COMMA:
     sPop    rbx
     mov     rcx, [HERE]
@@ -365,11 +369,10 @@ p_BASE:
     ret
 
 ; Add word to dictionary ( s1 -- )
-; Sets XT=HERE, delegates to addDictEntry
+; XT = HERE (captured by addDictEntry)
 p_ADDDICT:
     sPop    rsi                 ; rsi = name string
-    mov     rdi, [HERE]         ; rdi = XT (current HERE)
-    jmp     addDictEntry        ; tail call - addDictEntry will ret
+    jmp     addDictEntry        ; tail call
 
 ; Control flow
 p_BRANCH:
@@ -755,11 +758,10 @@ primEnd:
 ; Dictionary initialization
 ; ******************************************************************************
 
-; addDictEntry(rsi=name, rdi=xt) - adds one dictionary entry to the dictionary
+; addDictEntry(rsi=name) - adds one dictionary entry; XT = current HERE
+; Returns rbx = new entry pointer
 ; Uses registers only; does not touch the Forth data stack
 addDictEntry:
-    push    rdi                 ; save xt
-
     ; Allocate entry growing downward
     mov     rbx, [LAST]
     sub     rbx, DE_SIZE
@@ -772,9 +774,9 @@ addDictEntry:
     mov     qword [rbx+16], rcx
     mov     qword [rbx+24], rcx
 
-    ; XT = given primitive address
-    pop     rdi
-    mov     [rbx + DE_XT_OFFSET], rdi
+    ; XT = HERE
+    mov     rcx, [HERE]
+    mov     [rbx + DE_XT_OFFSET], rcx
 
     ; strlen(rsi) -> rdx, capped at DE_MAX_NAME
     mov     rdx, rsi
@@ -804,10 +806,11 @@ initDict:
     mov     rsi, [r8]           ; name ptr (0 = end of table)
     test    rsi, rsi
     jz      .done
-    mov     rdi, [r8+8]         ; primitive address
+    mov     r9, [r8+8]          ; primitive address - save before call (addDictEntry clobbers rcx/rdi)
     push    r8
-    call    addDictEntry
+    call    addDictEntry        ; rbx = new entry, XT set to HERE
     pop     r8
+    mov     [rbx + DE_XT_OFFSET], r9 ; overwrite XT with real primitive address
     add     r8, 16
     jmp     .loop
 .done:
@@ -845,6 +848,7 @@ primTable:
     dq nm_TYPE,    p_TYPE
     dq nm_KEY,     p_KEY
     dq nm_HERE,    p_HERE
+    dq nm_MEM,     p_MEM
     dq nm_COMMA,   p_COMMA
     dq nm_LITCOMMA, p_LITCOMMA
     dq nm_LAST,    p_LAST
@@ -1070,6 +1074,7 @@ nm_EMIT     db 'emit',    0
 nm_TYPE     db 'type',    0
 nm_KEY      db 'key',     0
 nm_HERE     db 'here',    0
+nm_MEM      db 'mem',     0
 nm_COMMA    db ',',       0
 nm_LITCOMMA db 'lit,',    0
 nm_LAST     db 'last',    0

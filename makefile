@@ -2,7 +2,7 @@ app := wc32
 
 COMP := fasm
 srcfiles := wc32.asm
-opts := -d FOR_OS=LINUX
+opts := -m 65536 -d FOR_OS=LINUX
 
 all: $(app)
 
