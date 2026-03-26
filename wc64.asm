@@ -454,12 +454,13 @@ p_SLEN:
     ret
 
 ; Case-insensitive string equal ( s1 s2 -- f )  f: -1 equal, 0 not equal
+; Uses r9/r10 as string pointers - does NOT clobber rsi or rdi
 p_SEQI:
-    sPop    rsi                 ; s1
-    mov     rdi, rax            ; s2
+    sPop    r9                  ; r9 = s1
+    mov     r10, rax            ; r10 = s2
 .loop:
-    movzx   eax, byte [rsi]
-    movzx   ecx, byte [rdi]
+    movzx   eax, byte [r9]
+    movzx   ecx, byte [r10]
     ; lowercase both: if 'A'-'Z' add 32
     cmp     al, 'A'
     jl      .noconv1
@@ -477,8 +478,8 @@ p_SEQI:
     jne     .notequal
     test    al, al              ; both zero = end of strings
     jz      .equal
-    inc     rsi
-    inc     rdi
+    inc     r9
+    inc     r10
     jmp     .loop
 .notequal:
     xor     rax, rax
@@ -498,6 +499,7 @@ p_WD:
     ret
 
 ; next-word ( -- )  skip whitespace, parse next word from input into WD
+; WD is a counted+null-terminated string: WD[0]=len, WD[1..len]=chars, WD[len+1]=0
 p_NEXTWORD:
     mov     rsi, [TOIN]         ; rsi = current input pointer
 .skip:
@@ -508,12 +510,12 @@ p_NEXTWORD:
     inc     rsi
     jmp     .skip
 .collect:
-    mov     rdi, WD
+    lea     rdi, [WD+1]         ; rdi = char area (WD[1..])
     xor     rcx, rcx
 .charloop:
     cmp     byte [rsi], 32      ; whitespace or null ends word
     jle     .worddone
-    cmp     rcx, 31             ; cap at 31 chars
+    cmp     rcx, 30             ; cap at 30 chars (1 len + 30 chars + 1 null = 32)
     jge     .worddone
     mov     al, [rsi]
     mov     [rdi + rcx], al
@@ -521,21 +523,20 @@ p_NEXTWORD:
     inc     rcx
     jmp     .charloop
 .worddone:
-    mov     byte [rdi + rcx], 0 ; null terminate
+    mov     byte [WD], cl       ; WD[0] = length
+    mov     byte [rdi + rcx], 0 ; null terminate after chars
     mov     [TOIN], rsi         ; update input pointer
     ret
 .empty:
-    mov     byte [WD], 0
+    mov     byte [WD], 0        ; empty counted string
     ret
 
-; find ( s -- e )  search dictionary for s, return entry addr or 0
-; checks length before string compare to avoid unnecessary work
+; find ( cs -- e )  search dictionary for counted string cs, return entry addr or 0
+; cs points at length byte (WD); dict entries at DE_LEN_OFFSET are same format
+; p_SEQI compares length bytes first - instant reject on mismatch
 p_FIND:
-    call    p_DUP               ; DUP s for length calculation
-    call    p_SLEN              ; ... ( s s -- s len )
-    sPop    rcx                 ; rcx = length
-    mov     rsi, rax            ; rsi = s
-    xor     rax, rax            ; default to not found (0)
+    mov     rsi, rax            ; rsi = cs (counted string ptr)
+    xor     rax, rax            ; rax = 0 (sentinel + default not-found)
 
     mov     rbx, [LAST]         ; rbx = current entry
     lea     rdx, [THE_DICT + DICT_SZ] ; rdx = end sentinel
@@ -544,22 +545,12 @@ p_FIND:
     cmp     rbx, rdx            ; past end of dictionary?
     jge     .notfound
 
-    ; compare length first - fast reject
-    movzx   r8, byte [rbx + DE_LEN_OFFSET]
-    cmp     r8, rcx
-    jne     .next
-
-    ; use p_SEQI ( s1 s2 -- f ) for case-insensitive compare
-    push    rcx                 ; save length (p_SEQI clobbers rcx)
-    push    rsi                 ; save search string (p_SEQI clobbers rsi)
-    sPush   rsi                 ; s1 = search string
-    lea     rdi, [rbx + DE_NAME_OFFSET]
-    sPush   rdi                 ; s2 = entry name
-    call    p_SEQI              ; ... ( 0 s1 s2 -- 0 f )
-    sPop    r8                  ; f into r8, restore TOS (from 538)
-    pop     rsi                 ; restore search string
-    pop     rcx                 ; restore length
-
+    ; compare cs against entry's counted string at DE_LEN_OFFSET
+    sPush   rsi                 ; s1 = search counted string (saves sentinel, TOS=rsi)
+    lea     r8, [rbx + DE_LEN_OFFSET] ; r8 = s2 = entry counted string
+    sPush   r8                  ; s2 on stack (saves rsi, TOS=r8)
+    call    p_SEQI              ; ( s1 s2 -- f )  length byte compared first
+    sPop    r8                  ; r8=result (f), rax=0 (sentinel) restored
     test    r8, r8
     jnz     .found
 
@@ -572,14 +563,16 @@ p_FIND:
     ret
 
 .notfound:
-    xor     rax, rax            ; not necessary: rax=0 restored by sPop r8, but kept for clarity
+                                ; rax=0: either never matched or last p_SEQI returned 0
     ret
 
-; is-num ( s -- n true | false )
-; parses s in BASE (% binary, # decimal, $ hex, 'x' char literal)
+; is-num ( cs -- n true | false )
+; cs is a counted string (WD); skips length byte, parses chars in BASE
+; handles % binary, # decimal, $ hex, 'x' char literal
 ; returns n 1 on success, 0 on failure
 p_ISNUM:
-    mov     rsi, rax            ; rsi = string pointer
+    mov     rsi, rax            ; rsi = counted string ptr
+    inc     rsi                 ; skip length byte, point at chars
     mov     rbx, [BASE]         ; rbx = base
     xor     rcx, rcx            ; rcx = accumulator
     xor     rdx, rdx            ; rdx = isNeg flag
@@ -675,6 +668,49 @@ p_ISNUM:
 p_IMMEDIATE:
     mov     rbx, [LAST]
     or      byte [rbx + DE_FLAGS_OFFSET], 0x80
+    ret
+
+; count ( cs -- str len )  split counted string into addr/len pair
+p_COUNT:
+    movzx   rbx, byte [rax]     ; rbx = length
+    inc     rax                 ; rax = char area (cs+1)
+    sPush   rbx                 ; save str, TOS = len
+    ret
+
+; fopen ( name flags -- fd )  sys_open; mode=0664 used when creating
+p_FOPEN:
+    sPop    rsi                 ; rsi = flags
+    mov     rdi, rax            ; rdi = name (will become fd after syscall)
+    mov     rdx, 0x1B4          ; mode = 0664
+    mov     rax, 2              ; sys_open
+    syscall                     ; rax = fd (new TOS)
+    ret
+
+; fclose ( fd -- )  sys_close
+p_FCLOSE:
+    sPop    rdi                 ; rdi = fd
+    push    rax                 ; save TOS (rax needed for syscall)
+    mov     rax, 3              ; sys_close
+    syscall
+    pop     rax                 ; restore TOS
+    ret
+
+; fread ( buf len fd -- n )  sys_read; returns bytes read
+p_FREAD:
+    sPop    rdi                 ; rdi = fd
+    sPop    rdx                 ; rdx = len
+    mov     rsi, rax            ; rsi = buf
+    mov     rax, 0              ; sys_read
+    syscall                     ; rax = bytes read (new TOS)
+    ret
+
+; fwrite ( buf len fd -- n )  sys_write; returns bytes written
+p_FWRITE:
+    sPop    rdi                 ; rdi = fd
+    sPop    rdx                 ; rdx = len
+    mov     rsi, rax            ; rsi = buf
+    mov     rax, 1              ; sys_write
+    syscall                     ; rax = bytes written (new TOS)
     ret
 
 primEnd:
@@ -795,6 +831,11 @@ primTable:
     dq nm_NEXTWORD,p_NEXTWORD
     dq nm_ISNUM,     p_ISNUM
     dq nm_IMMEDIATE, p_IMMEDIATE
+    dq nm_COUNT,     p_COUNT
+    dq nm_FOPEN,     p_FOPEN
+    dq nm_FCLOSE,    p_FCLOSE
+    dq nm_FREAD,     p_FREAD
+    dq nm_FWRITE,    p_FWRITE
     dq 0, 0                     ; end of table
 
 ; ******************************************************************************
@@ -807,24 +848,22 @@ xHello:
 ; Test: print banner, look up "dup" in the dictionary, report found/not found
 findTest:
     dq p_LIT, helloStr, p_LIT, helloLen, p_TYPE, p_CR
-    dq p_LIT, xtWord            ; ( -- s )
-    dq p_FIND                   ; ( s -- entry|0 )
-    dq p_DUP                    ; ( entry|0 entry|0 )
+    dq p_LIT, xtWord            ; ( -- cs )
+    dq p_FIND                   ; ( cs -- entry|0 )
+    dq p_DUP                    ; ( entry|0 -- entry|0 entry|0 )
     dq p_ZBRANCH, findTest_no
     dq p_DROP
-    dq p_LIT, xtFoundStr, p_LIT, xtFoundLen, p_TYPE, p_CR
+    dq p_LIT, xtFoundStr, p_COUNT, p_TYPE, p_CR
     dq p_BRANCH, findTest_done
 findTest_no:
     dq p_DROP
-    dq p_LIT, xtMissStr, p_LIT, xtMissLen, p_TYPE, p_CR
+    dq p_LIT, xtMissStr, p_COUNT, p_TYPE, p_CR
 findTest_done:
     dq p_BYE
 
-xtWord      db  'dup', 0
-xtFoundStr  db  'find(dup): FOUND', 10
-xtFoundLen  =   $ - xtFoundStr
-xtMissStr   db  'find(dup): NOT FOUND', 10
-xtMissLen   =   $ - xtMissStr
+xtWord      db  3, 'dup', 0
+xtFoundStr  db  16, 'find(dup): FOUND', 10
+xtMissStr   db  20, 'find(dup): NOT FOUND', 10
 
 ; Test is-num with: "42" (true), "abc" (false), "$1F" (true hex)
 numTest:
@@ -832,50 +871,108 @@ numTest:
     dq p_LIT, nt_42
     dq p_ISNUM
     dq p_ZBRANCH, numTest_f1
-    dq p_DROP                           ; discard n
-    dq p_LIT, nt_ok42s, p_LIT, nt_ok42l, p_TYPE, p_CR
+    dq p_DROP
+    dq p_LIT, nt_ok42s, p_COUNT, p_TYPE, p_CR
     dq p_BRANCH, numTest_n1
 numTest_f1:
-    dq p_LIT, nt_fail42s, p_LIT, nt_fail42l, p_TYPE, p_CR
+    dq p_LIT, nt_fail42s, p_COUNT, p_TYPE, p_CR
 numTest_n1:
     ; "abc" -> expect false
     dq p_LIT, nt_abc
     dq p_ISNUM
-    dq p_ZBRANCH, numTest_ok2           ; 0branch taken = false = expected
+    dq p_ZBRANCH, numTest_ok2
     dq p_DROP
-    dq p_LIT, nt_failabcs, p_LIT, nt_failabcl, p_TYPE, p_CR
+    dq p_LIT, nt_failabcs, p_COUNT, p_TYPE, p_CR
     dq p_BRANCH, numTest_n2
 numTest_ok2:
-    dq p_LIT, nt_okabcs, p_LIT, nt_okabcl, p_TYPE, p_CR
+    dq p_LIT, nt_okabcs, p_COUNT, p_TYPE, p_CR
 numTest_n2:
     ; "$1F" -> expect true (n=31)
     dq p_LIT, nt_hex
     dq p_ISNUM
     dq p_ZBRANCH, numTest_f3
     dq p_DROP
-    dq p_LIT, nt_okhexs, p_LIT, nt_okhexl, p_TYPE, p_CR
+    dq p_LIT, nt_okhexs, p_COUNT, p_TYPE, p_CR
     dq p_BRANCH, numTest_n3
 numTest_f3:
-    dq p_LIT, nt_failhexs, p_LIT, nt_failhexl, p_TYPE, p_CR
+    dq p_LIT, nt_failhexs, p_COUNT, p_TYPE, p_CR
 numTest_n3:
     dq p_BYE
 
-nt_42       db '42', 0
-nt_abc      db 'abc', 0
-nt_hex      db '$1F', 0
+nt_42       db 2, '42', 0
+nt_abc      db 3, 'abc', 0
+nt_hex      db 3, '$1F', 0
 
-nt_ok42s    db 'is-num(42):  PASS', 10
-nt_ok42l    = $ - nt_ok42s
-nt_fail42s  db 'is-num(42):  FAIL', 10
-nt_fail42l  = $ - nt_fail42s
-nt_okabcs   db 'is-num(abc): PASS', 10
-nt_okabcl   = $ - nt_okabcs
-nt_failabcs db 'is-num(abc): FAIL', 10
-nt_failabcl = $ - nt_failabcs
-nt_okhexs   db 'is-num($1F): PASS', 10
-nt_okhexl   = $ - nt_okhexs
-nt_failhexs db 'is-num($1F): FAIL', 10
-nt_failhexl = $ - nt_failhexs
+nt_ok42s    db 17, 'is-num(42):  PASS', 10
+nt_fail42s  db 17, 'is-num(42):  FAIL', 10
+nt_okabcs   db 17, 'is-num(abc): PASS', 10
+nt_failabcs db 17, 'is-num(abc): FAIL', 10
+nt_okhexs   db 17, 'is-num($1F): PASS', 10
+nt_failhexs db 17, 'is-num($1F): FAIL', 10
+
+; Test p_NEXTWORD: set TOIN to a known string, parse 3 words, verify 4th is empty
+nwTest:
+    ; TOIN = nwInput
+    dq p_LIT, nwInput
+    dq p_TOIN               ; ( nwInput &TOIN )
+    dq p_STORE              ; TOIN = nwInput, stack empty
+    ; word 1: expect "dup"
+    dq p_NEXTWORD, p_WD, p_COUNT, p_TYPE, p_CR
+    ; word 2: expect "swap"
+    dq p_NEXTWORD, p_WD, p_COUNT, p_TYPE, p_CR
+    ; word 3: expect "42"
+    dq p_NEXTWORD, p_WD, p_COUNT, p_TYPE, p_CR
+    ; word 4: should be empty (WD[0] == 0)
+    dq p_NEXTWORD
+    dq p_WD
+    dq p_CFETCH
+    dq p_ZBRANCH, nwTest_empty
+    dq p_LIT, nwFailStr, p_COUNT, p_TYPE, p_CR
+    dq p_BRANCH, nwTest_done
+nwTest_empty:
+    dq p_LIT, nwOkStr, p_COUNT, p_TYPE, p_CR
+nwTest_done:
+    dq p_BYE
+
+nwInput     db '  dup  swap  42  ', 0
+nwFailStr   db 21, 'next-word empty: FAIL', 10
+nwOkStr     db 21, 'next-word empty: PASS', 10
+
+; Test file I/O: write string to /tmp/wc64test.tmp, read it back, print it
+fioTest:
+    dq p_TSPI                       ; +L  allocate locals frame (x = fd)
+    ; === write phase (O_WRONLY|O_CREAT|O_TRUNC = 0x241) ===
+    dq p_LIT, fioFile, p_LIT, 0x241
+    dq p_FOPEN                      ; ( fd )
+    dq p_DUP, p_LIT, 0, p_LESS     ; ( fd fd<0 )
+    dq p_ZBRANCH, fio_wOk
+    dq p_DROP, p_LIT, fioErrStr, p_COUNT, p_TYPE, p_CR, p_TSPD, p_BYE
+fio_wOk:
+    dq p_XSTO                       ; x = fd  ( )
+    dq p_LIT, fioData, p_LIT, fioDataLen, p_XFET
+    dq p_FWRITE, p_DROP             ; ( )
+    dq p_XFET, p_FCLOSE             ; ( )
+    ; === read phase (O_RDONLY = 0) ===
+    dq p_LIT, fioFile, p_LIT, 0
+    dq p_FOPEN                      ; ( fd )
+    dq p_DUP, p_LIT, 0, p_LESS
+    dq p_ZBRANCH, fio_rOk
+    dq p_DROP, p_LIT, fioErrStr, p_COUNT, p_TYPE, p_CR, p_TSPD, p_BYE
+fio_rOk:
+    dq p_XSTO                       ; x = fd  ( )
+    dq p_LIT, fioBuf, p_LIT, fioDataLen, p_XFET
+    dq p_FREAD, p_DROP              ; ( )
+    dq p_XFET, p_FCLOSE             ; ( )
+    ; === report ===
+    dq p_LIT, fioPassStr, p_COUNT, p_TYPE, p_CR
+    dq p_LIT, fioBuf, p_LIT, fioDataLen, p_TYPE
+    dq p_TSPD, p_BYE                ; -L  free locals frame
+
+fioFile     db '/tmp/wc64test.tmp', 0
+fioData     db 'file-io test data', 10
+fioDataLen  = $ - fioData
+fioPassStr  db 13, 'fio-test: ok!', 10
+fioErrStr   db 13, 'fio-test: ERR', 10
 
 ; ******************************************************************************
 ; Data segment
@@ -894,6 +991,7 @@ charBuf     db 0
 spaceStr    db ' '
 crStr       db 10
 numBuf      rb 32
+fioBuf      rb 32
 
 helloStr    db 'WC64 - 64-bit Forth System'
 helloLen    = $ - helloStr
@@ -952,6 +1050,11 @@ nm_WD       db 'wd',      0
 nm_NEXTWORD db 'next-word',0
 nm_ISNUM    db 'is-num',   0
 nm_IMMEDIATE db 'immediate',0
+nm_COUNT    db 'count',    0
+nm_FOPEN    db 'fopen',    0
+nm_FCLOSE   db 'fclose',   0
+nm_FREAD    db 'fread',    0
+nm_FWRITE   db 'fwrite',   0
 
 align 8
 dStack      rq 256
@@ -960,4 +1063,4 @@ tStack      rq 64
 
 THE_CODE:   rb CODE_SZ
 THE_DICT:   rb DICT_SZ
-THE_ROM = numTest
+THE_ROM = fioTest
