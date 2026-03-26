@@ -905,7 +905,7 @@ findTest_no:
     dq p_DROP
     dq p_LIT, xtMissStr, p_COUNT, p_TYPE, p_CR
 findTest_done:
-    dq p_BYE
+    dq p_EXIT
 
 xtWord      db  3, 'dup', 0
 xtFoundStr  db  16, 'find(dup): FOUND', 10
@@ -943,7 +943,7 @@ numTest_n2:
 numTest_f3:
     dq p_LIT, nt_failhexs, p_COUNT, p_TYPE, p_CR
 numTest_n3:
-    dq p_BYE
+    dq p_EXIT
 
 nt_42       db 2, '42', 0
 nt_abc      db 3, 'abc', 0
@@ -978,7 +978,7 @@ nwTest:
 nwTest_empty:
     dq p_LIT, nwOkStr, p_COUNT, p_TYPE, p_CR
 nwTest_done:
-    dq p_BYE
+    dq p_EXIT
 
 nwInput     db '  dup  swap  42  ', 0
 nwFailStr   db 21, 'next-word empty: FAIL', 10
@@ -1012,7 +1012,14 @@ fio_rOk:
     ; === report ===
     dq p_LIT, fioPassStr, p_COUNT, p_TYPE, p_CR
     dq p_LIT, fioBuf, p_LIT, fioDataLen, p_TYPE
-    dq p_TSPD, p_BYE                ; -L  free locals frame
+    dq p_TSPD, p_EXIT               ; -L  free locals frame
+
+allTests:
+    dq findTest
+    dq numTest
+    dq nwTest
+    dq fioTest
+    dq p_BYE
 
 fioFile     db '/tmp/wc64test.tmp', 0
 fioData     db 'file-io test data', 10
@@ -1116,4 +1123,4 @@ tStack      rq 64
 
 THE_CODE:   rb CODE_SZ
 THE_DICT:   rb DICT_SZ
-THE_ROM = fioTest
+THE_ROM = allTests
