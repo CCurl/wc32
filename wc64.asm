@@ -556,8 +556,8 @@ p_NEXTWORD:
     jle     .worddone
     cmp     rcx, 30             ; cap at 30 chars (1 len + 30 chars + 1 null = 32)
     jge     .worddone
-    mov     al, [rsi]
-    mov     [rdi + rcx], al
+    mov     bl, [rsi]
+    mov     [rdi + rcx], bl
     inc     rsi
     inc     rcx
     jmp     .charloop
@@ -752,7 +752,49 @@ p_FWRITE:
     syscall                     ; rax = bytes written (new TOS)
     ret
 
+; outer ( str -- )  primitive wrapper: pop string, call outer
+p_OUTER:
+    sPop    rdi
+    jmp     outer               ; tail call
+
 primEnd:
+
+; ******************************************************************************
+; Outer interpreter
+; ******************************************************************************
+
+; outer(rdi = source string)
+; Saves/restores TOIN.  Loop: call next-word; if WD empty, done; else print it.
+outer:
+    push    qword [TOIN]        ; save current TOIN
+    mov     [TOIN], rdi         ; point TOIN at input string
+
+.loop:
+    call    p_NEXTWORD
+
+    cmp     byte [WD], 0        ; empty → end of input
+    je      .done
+
+    sPush   WD                  ; ( -- cs )  push WD counted-string address
+    call    p_ISNUM             ; ( cs -- n true|false )  leaves n or 0 on TOS
+    sPop    rbx                 ; (n true|false -- )  get the flag into rbx
+    test    rbx, rbx            ; non-zero => is number
+    jz      .notnum
+    cmp     qword [STATE], 0    ; interpreting?
+    je      .loop
+    call    p_LITCOMMA          ; compile number into code stream
+    jmp     .loop
+
+.notnum:
+    sPush   WD                  ; ( -- cs )  push WD counted-string address
+    call    p_COUNT             ; ( cs -- str len )
+    call    p_TYPE              ; ( str len -- )
+    call    p_CR
+    jmp     .loop
+
+.done:
+    pop     qword [TOIN]        ; restore TOIN
+    ret
 
 ; ******************************************************************************
 ; Dictionary initialization
@@ -882,6 +924,7 @@ primTable:
     dq nm_FCLOSE,    p_FCLOSE
     dq nm_FREAD,     p_FREAD
     dq nm_FWRITE,    p_FWRITE
+    dq nm_OUTER,     p_OUTER
     dq 0, 0                     ; end of table
 
 ; ******************************************************************************
@@ -1014,7 +1057,15 @@ fio_rOk:
     dq p_LIT, fioBuf, p_LIT, fioDataLen, p_TYPE
     dq p_TSPD, p_EXIT               ; -L  free locals frame
 
+outerTest:
+    dq p_LIT, outerInput
+    dq p_OUTER
+    dq p_EXIT
+
+outerInput  db 'not-num xxx 12345 yyy zzz', 0
+
 allTests:
+    dq outerTest
     dq findTest
     dq numTest
     dq nwTest
@@ -1115,6 +1166,7 @@ nm_FOPEN    db 'fopen',    0
 nm_FCLOSE   db 'fclose',   0
 nm_FREAD    db 'fread',    0
 nm_FWRITE   db 'fwrite',   0
+nm_OUTER    db 'outer',    0
 
 align 8
 dStack      rq 256
