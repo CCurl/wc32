@@ -492,27 +492,28 @@ p_SLEN:
     mov     rax, rcx
     ret
 
+; Make TOS lowercase ( c1 -- c2 )
+p_LCASE:
+    cmp     rax, 'A'
+    jl      .done
+    cmp     rax, 'Z'
+    jg      .done
+    add     rax, 32
+.done:
+    ret
+
 ; Case-insensitive string equal ( s1 s2 -- f )  f: -1 equal, 0 not equal
 ; Uses r9/r10 as string pointers - does NOT clobber rsi or rdi
 p_SEQI:
-    sPop    r9                  ; r9 = s1
-    mov     r10, rax            ; r10 = s2
+    sPop    r9                  ; r9 = s2
+    sPop    r10                 ; r10 = s1
+    sPush   0                   ; make scratch space for use and result; set later to T/F
 .loop:
-    movzx   eax, byte [r9]
-    movzx   ecx, byte [r10]
-    ; lowercase both: if 'A'-'Z' add 32
-    cmp     al, 'A'
-    jl      .noconv1
-    cmp     al, 'Z'
-    jg      .noconv1
-    add     al, 32
-.noconv1:
-    cmp     cl, 'A'
-    jl      .noconv2
-    cmp     cl, 'Z'
-    jg      .noconv2
-    add     cl, 32
-.noconv2:
+    movzx   rax, byte [r9]
+    call    p_LCASE
+    mov     cl, al              ; cl = lowercase char from s2
+    movzx   rax, byte [r10]
+    call    p_LCASE             ; al = lowercase char from s1
     cmp     al, cl
     jne     .notequal
     test    al, al              ; both zero = end of strings
@@ -763,6 +764,28 @@ primEnd:
 ; Outer interpreter
 ; ******************************************************************************
 
+; isColon set the carry flag if WD is a colon
+isColon:
+    cmp     byte [WD], 1        ; length == 1?
+    jne     retFalse
+    cmp     byte [WD+1], ':'    ; first char == ':'?
+    je      retTrue
+    jne     retFalse
+
+; isSemi set the carry flag if WD is a semicolon
+isSemi:
+    cmp     byte [WD], 1        ; length == 1?
+    jne     retFalse
+    cmp     byte [WD+1], ';'    ; first char == ';'?
+    jne     retFalse
+
+retTrue:
+    stc
+    ret
+retFalse:
+    clc
+    ret
+
 ; outer(rdi = source string)
 ; Saves/restores TOIN.  Loop: call next-word; if WD empty, done; else print it.
 outer:
@@ -771,10 +794,15 @@ outer:
 
 .loop:
     call    p_NEXTWORD
-
     cmp     byte [WD], 0        ; empty → end of input
     je      .done
 
+    call    isColon             ; CF is set if WD is a colon
+    jc      .colon
+    call    isSemi              ; CF is set if WD is a semicolon
+    jc      .semi
+
+    ; Is it a number?
     sPush   WD                  ; ( -- cs )  push WD counted-string address
     call    p_ISNUM             ; ( cs -- n true|false )  leaves n or 0 on TOS
     sPop    rbx                 ; (n true|false -- )  get the flag into rbx
@@ -785,10 +813,57 @@ outer:
     call    p_LITCOMMA          ; compile number into code stream
     jmp     .loop
 
-.notnum:
+.notnum: ; It is not a number, is it a WORD in the dictionary?
     sPush   WD                  ; ( -- cs )  push WD counted-string address
-    call    p_COUNT             ; ( cs -- str len )
-    call    p_TYPE              ; ( str len -- )
+    call    p_FIND              ; ( cs -- entry|0 )
+    sPop    rbx                 ; zero if not found
+    test    rbx, rbx
+    jz      .notfound
+
+    mov     rdx, [rbx + DE_XT_OFFSET] ; get entry's XT
+    cmp     [STATE], 0          ; interpreting?
+    je      .interp
+    test    byte [rbx + DE_FLAGS_OFFSET], 0x80 ; check immediate flag
+    jnz     .interp
+    sPush   rdx                 ; ( -- xt )  push XT of found word
+    call    p_COMMA             ; compile XT into code stream
+    jmp     .loop
+
+.colon:
+    call    p_NEXTWORD          ; get next word, which should be the new word's name
+    lea     rsi, [WD+1]         ; rsi = name char ptr
+    call    addDictEntry        ; add new word to dictionary
+    mov     [STATE], 1          ; switch to compiling
+    jmp     .loop
+
+.semi:
+    sPush   p_EXIT
+    call    p_COMMA             ; compile XT into code stream
+    mov     [STATE], 0          ; switch to interpreting
+    jmp     .loop
+
+.interp:
+    cmp     rdx, primEnd        ; primitive?
+    jb      .prim
+    xor     rbx, rbx
+    rPush   rbx                 ; NULL sentinel so interpret exits cleanly
+    push    r15                 ; save outer IP
+    mov     r15, rdx
+    call    interpret
+    pop     r15                 ; restore outer IP
+    jmp     .loop
+.prim:
+    call    rdx
+    jmp     .loop
+
+.notfound:
+    ; Not found: print it with a "?" prefix
+    mov     [STATE], 0          ; switch to interpreting
+    sPush   '?'
+    call    p_EMIT
+    sPush   WD
+    call    p_COUNT
+    call    p_TYPE
     call    p_CR
     jmp     .loop
 
@@ -859,64 +934,65 @@ initDict:
     ret
 
 primTable:
-    dq nm_EXIT,    p_EXIT
-    dq nm_DUP,     p_DUP
-    dq nm_DROP,    p_DROP
-    dq nm_SWAP,    p_SWAP
-    dq nm_OVER,    p_OVER
-    dq nm_PLUS,    p_PLUS
-    dq nm_MINUS,   p_MINUS
-    dq nm_MULT,    p_MULT
-    dq nm_DIVMOD,  p_DIVMOD
-    dq nm_INC,     p_INC
-    dq nm_DEC,     p_DEC
-    dq nm_NEG,     p_NEG
-    dq nm_AND,     p_AND
-    dq nm_OR,      p_OR
-    dq nm_XOR,     p_XOR
-    dq nm_INVERT,  p_INVERT
-    dq nm_EQUAL,   p_EQUAL
-    dq nm_LESS,    p_LESS
-    dq nm_GREATER, p_GREATER
-    dq nm_FETCH,   p_FETCH
-    dq nm_STORE,   p_STORE
-    dq nm_CFETCH,  p_CFETCH
-    dq nm_CSTORE,  p_CSTORE
-    dq nm_TOR,     p_TOR
-    dq nm_FROMR,   p_FROMR
-    dq nm_RFETCH,  p_RFETCH
-    dq nm_LIT,     p_LIT
-    dq nm_EMIT,    p_EMIT
-    dq nm_TYPE,    p_TYPE
-    dq nm_KEY,     p_KEY
-    dq nm_HERE,    p_HERE
-    dq nm_MEM,     p_MEM
-    dq nm_COMMA,   p_COMMA
-    dq nm_LITCOMMA, p_LITCOMMA
-    dq nm_LAST,    p_LAST
-    dq nm_BASE,    p_BASE
-    dq nm_BRANCH,  p_BRANCH
-    dq nm_ZBRANCH, p_ZBRANCH
-    dq nm_BYE,     p_BYE
-    dq nm_CR,      p_CR
-    dq nm_TSPI,    p_TSPI
-    dq nm_TSPD,    p_TSPD
-    dq nm_XFET,    p_XFET
-    dq nm_XSTO,    p_XSTO
-    dq nm_XFETI,   p_XFETI
-    dq nm_YFET,    p_YFET
-    dq nm_YSTO,    p_YSTO
-    dq nm_YFETI,   p_YFETI
-    dq nm_ZFET,    p_ZFET
-    dq nm_ZSTO,    p_ZSTO
-    dq nm_ZFETI,   p_ZFETI
-    dq nm_SLEN,    p_SLEN
-    dq nm_SEQI,    p_SEQI
-    dq nm_FIND,    p_FIND
-    dq nm_ADDDICT, p_ADDDICT
-    dq nm_TOIN,    p_TOIN
-    dq nm_WD,      p_WD
-    dq nm_NEXTWORD,p_NEXTWORD
+    dq nm_EXIT,      p_EXIT
+    dq nm_DUP,       p_DUP
+    dq nm_DROP,      p_DROP
+    dq nm_SWAP,      p_SWAP
+    dq nm_OVER,      p_OVER
+    dq nm_PLUS,      p_PLUS
+    dq nm_MINUS,     p_MINUS
+    dq nm_MULT,      p_MULT
+    dq nm_DIVMOD,    p_DIVMOD
+    dq nm_INC,       p_INC
+    dq nm_DEC,       p_DEC
+    dq nm_NEG,       p_NEG
+    dq nm_AND,       p_AND
+    dq nm_OR,        p_OR
+    dq nm_XOR,       p_XOR
+    dq nm_INVERT,    p_INVERT
+    dq nm_EQUAL,     p_EQUAL
+    dq nm_LESS,      p_LESS
+    dq nm_GREATER,   p_GREATER
+    dq nm_FETCH,     p_FETCH
+    dq nm_STORE,     p_STORE
+    dq nm_CFETCH,    p_CFETCH
+    dq nm_CSTORE,    p_CSTORE
+    dq nm_TOR,       p_TOR
+    dq nm_FROMR,     p_FROMR
+    dq nm_RFETCH,    p_RFETCH
+    dq nm_LIT,       p_LIT
+    dq nm_EMIT,      p_EMIT
+    dq nm_TYPE,      p_TYPE
+    dq nm_KEY,       p_KEY
+    dq nm_HERE,      p_HERE
+    dq nm_MEM,       p_MEM
+    dq nm_COMMA,     p_COMMA
+    dq nm_LITCOMMA,  p_LITCOMMA
+    dq nm_LAST,      p_LAST
+    dq nm_BASE,      p_BASE
+    dq nm_BRANCH,    p_BRANCH
+    dq nm_ZBRANCH,   p_ZBRANCH
+    dq nm_BYE,       p_BYE
+    dq nm_CR,        p_CR
+    dq nm_TSPI,      p_TSPI
+    dq nm_TSPD,      p_TSPD
+    dq nm_XFET,      p_XFET
+    dq nm_XSTO,      p_XSTO
+    dq nm_XFETI,     p_XFETI
+    dq nm_YFET,      p_YFET
+    dq nm_YSTO,      p_YSTO
+    dq nm_YFETI,     p_YFETI
+    dq nm_ZFET,      p_ZFET
+    dq nm_ZSTO,      p_ZSTO
+    dq nm_ZFETI,     p_ZFETI
+    dq nm_SLEN,      p_SLEN
+    dq nm_LCASE,     p_LCASE
+    dq nm_SEQI,      p_SEQI
+    dq nm_FIND,      p_FIND
+    dq nm_ADDDICT,   p_ADDDICT
+    dq nm_TOIN,      p_TOIN
+    dq nm_WD,        p_WD
+    dq nm_NEXTWORD,  p_NEXTWORD
     dq nm_ISNUM,     p_ISNUM
     dq nm_IMMEDIATE, p_IMMEDIATE
     dq nm_COUNT,     p_COUNT
@@ -925,11 +1001,14 @@ primTable:
     dq nm_FREAD,     p_FREAD
     dq nm_FWRITE,    p_FWRITE
     dq nm_OUTER,     p_OUTER
-    dq 0, 0                     ; end of table
+    dq 0, 0  ; end of table
 
 ; ******************************************************************************
-; High-level definitions (threaded code)
+; TEST CODE  (remove this section and the fioBuf entry in the data segment)
 ; ******************************************************************************
+
+helloStr    db 'WC64 - 64-bit Forth System'
+helloLen    = $ - helloStr
 
 xHello:
     dq p_LIT, helloStr, p_LIT, helloLen, p_TYPE, p_CR, p_EXIT, p_BYE
@@ -1062,7 +1141,7 @@ outerTest:
     dq p_OUTER
     dq p_EXIT
 
-outerInput  db 'not-num xxx 12345 yyy zzz', 0
+outerInput  db ': double dup + ; 33 double emit', 0
 
 allTests:
     dq outerTest
@@ -1079,6 +1158,10 @@ fioPassStr  db 13, 'fio-test: ok!', 10
 fioErrStr   db 13, 'fio-test: ERR', 10
 
 ; ******************************************************************************
+; END TEST CODE
+; ******************************************************************************
+
+; ******************************************************************************
 ; Data segment
 ; ******************************************************************************
 segment readable writable
@@ -1091,15 +1174,11 @@ STATE       dq 0
 TOIN        dq 0
 
 WD          rb 32
+fioBuf      rb 32                   ; TEST DATA: remove with test section
 charBuf     db 0
 spaceStr    db ' '
 crStr       db 10
 numBuf      rb 32
-fioBuf      rb 32
-
-helloStr    db 'WC64 - 64-bit Forth System'
-helloLen    = $ - helloStr
-
 ; Primitive names
 nm_EXIT     db 'exit',    0
 nm_DUP      db 'dup',     0
@@ -1153,6 +1232,7 @@ nm_ZFET     db 'z@',      0
 nm_ZSTO     db 'z!',      0
 nm_ZFETI    db 'z@+',     0
 nm_SLEN     db 's-len',   0
+nm_LCASE    db 'lcase',   0
 nm_SEQI     db 's-eqi',   0
 nm_FIND     db 'find',    0
 nm_ADDDICT  db 'add-word',0
