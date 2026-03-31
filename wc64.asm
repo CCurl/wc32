@@ -754,6 +754,64 @@ p_FWRITE:
     ret
 
 ; outer ( str -- )  primitive wrapper: pop string, call outer
+; syscall0-6 ( a1..aN n -- r )  raw Linux syscalls
+; Usage: a1 a2 a3 n syscall3  (natural left-to-right order)
+; TOS=n, [rbp]=aN, ..., [rbp-(N-1)*8]=a1
+p_SYSCALL0:
+    syscall
+    ret
+
+p_SYSCALL1:
+    mov     rdi, [rbp]              ; a1 (only arg, deepest)
+    sub     rbp, CELL_SZ
+    syscall
+    ret
+
+p_SYSCALL2:
+    mov     rsi, [rbp]              ; a2 (last pushed)
+    mov     rdi, [rbp-CELL_SZ]      ; a1 (first pushed)
+    sub     rbp, 2*CELL_SZ
+    syscall
+    ret
+
+p_SYSCALL3:
+    mov     rdx, [rbp]              ; a3
+    mov     rsi, [rbp-CELL_SZ]      ; a2
+    mov     rdi, [rbp-2*CELL_SZ]    ; a1
+    sub     rbp, 3*CELL_SZ
+    syscall
+    ret
+
+p_SYSCALL4:
+    mov     r10, [rbp]              ; a4
+    mov     rdx, [rbp-CELL_SZ]      ; a3
+    mov     rsi, [rbp-2*CELL_SZ]    ; a2
+    mov     rdi, [rbp-3*CELL_SZ]    ; a1
+    sub     rbp, 4*CELL_SZ
+    syscall
+    ret
+
+p_SYSCALL5:
+    mov     r8,  [rbp]              ; a5
+    mov     r10, [rbp-CELL_SZ]      ; a4
+    mov     rdx, [rbp-2*CELL_SZ]    ; a3
+    mov     rsi, [rbp-3*CELL_SZ]    ; a2
+    mov     rdi, [rbp-4*CELL_SZ]    ; a1
+    sub     rbp, 5*CELL_SZ
+    syscall
+    ret
+
+p_SYSCALL6:
+    mov     r9,  [rbp]              ; a6
+    mov     r8,  [rbp-CELL_SZ]      ; a5
+    mov     r10, [rbp-2*CELL_SZ]    ; a4
+    mov     rdx, [rbp-3*CELL_SZ]    ; a3
+    mov     rsi, [rbp-4*CELL_SZ]    ; a2
+    mov     rdi, [rbp-5*CELL_SZ]    ; a1
+    sub     rbp, 6*CELL_SZ
+    syscall
+    ret
+
 p_OUTER:
     sPop    rdi
     jmp     outer               ; tail call
@@ -1001,6 +1059,13 @@ primTable:
     dq nm_FREAD,     p_FREAD
     dq nm_FWRITE,    p_FWRITE
     dq nm_OUTER,     p_OUTER
+    dq nm_SYSCALL0,  p_SYSCALL0
+    dq nm_SYSCALL1,  p_SYSCALL1
+    dq nm_SYSCALL2,  p_SYSCALL2
+    dq nm_SYSCALL3,  p_SYSCALL3
+    dq nm_SYSCALL4,  p_SYSCALL4
+    dq nm_SYSCALL5,  p_SYSCALL5
+    dq nm_SYSCALL6,  p_SYSCALL6
     dq 0, 0  ; end of table
 
 ; ******************************************************************************
@@ -1132,6 +1197,13 @@ nm_FCLOSE   db 'fclose',   0
 nm_FREAD    db 'fread',    0
 nm_FWRITE   db 'fwrite',   0
 nm_OUTER    db 'outer',    0
+nm_SYSCALL0 db 'syscall0', 0
+nm_SYSCALL1 db 'syscall1', 0
+nm_SYSCALL2 db 'syscall2', 0
+nm_SYSCALL3 db 'syscall3', 0
+nm_SYSCALL4 db 'syscall4', 0
+nm_SYSCALL5 db 'syscall5', 0
+nm_SYSCALL6 db 'syscall6', 0
 
 align 8
 dStack      rq 256

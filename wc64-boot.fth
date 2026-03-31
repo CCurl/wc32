@@ -1,1 +1,1 @@
-: double dup + ; 33 double emit
+33 emit
