@@ -1004,162 +1004,48 @@ primTable:
     dq 0, 0  ; end of table
 
 ; ******************************************************************************
-; TEST CODE  (remove this section and the fioBuf entry in the data segment)
+; Boot loader
 ; ******************************************************************************
 
-helloStr    db 'WC64 - 64-bit Forth System'
-helloLen    = $ - helloStr
-
-xHello:
-    dq p_LIT, helloStr, p_LIT, helloLen, p_TYPE, p_CR, p_EXIT, p_BYE
-
-; Test: print banner, look up "dup" in the dictionary, report found/not found
-findTest:
-    dq p_LIT, helloStr, p_LIT, helloLen, p_TYPE, p_CR
-    dq p_LIT, xtWord            ; ( -- cs )
-    dq p_FIND                   ; ( cs -- entry|0 )
-    dq p_DUP                    ; ( entry|0 -- entry|0 entry|0 )
-    dq p_ZBRANCH, findTest_no
+; boot - open wc64-boot.fth, read into THE_CODE+100000, call outer
+; Runs as threaded code via THE_ROM
+boot:
+    dq p_TSPI                           ; +L  (x=fd)
+    dq p_LIT, bootFile, p_LIT, 0       ; ( name O_RDONLY )
+    dq p_FOPEN                          ; ( fd )
+    dq p_DUP, p_LIT, 0, p_LESS         ; ( fd fd<0 )
+    dq p_ZBRANCH, boot_ok
     dq p_DROP
-    dq p_LIT, xtFoundStr, p_COUNT, p_TYPE, p_CR
-    dq p_BRANCH, findTest_done
-findTest_no:
+    dq p_LIT, bootErrStr, p_LIT, bootErrLen, p_TYPE
+    dq p_TSPD, p_BYE
+boot_ok:
+    dq p_XSTO                           ; x = fd
+    dq p_LIT, THE_CODE+100000
+    dq p_LIT, bootBufSz
+    dq p_XFET, p_FREAD                  ; ( n )  bytes read
+    dq p_DUP, p_LIT, 0, p_LESS         ; ( n n<0 )
+    dq p_ZBRANCH, boot_read_ok
     dq p_DROP
-    dq p_LIT, xtMissStr, p_COUNT, p_TYPE, p_CR
-findTest_done:
-    dq p_EXIT
-
-xtWord      db  3, 'dup', 0
-xtFoundStr  db  16, 'find(dup): FOUND', 10
-xtMissStr   db  20, 'find(dup): NOT FOUND', 10
-
-; Test is-num with: "42" (true), "abc" (false), "$1F" (true hex)
-numTest:
-    ; "42" -> expect true (n=42)
-    dq p_LIT, nt_42
-    dq p_ISNUM
-    dq p_ZBRANCH, numTest_f1
+    dq p_LIT, bootErrStr, p_LIT, bootErrLen, p_TYPE
+    dq p_TSPD, p_BYE
+boot_read_ok:
     dq p_DROP
-    dq p_LIT, nt_ok42s, p_COUNT, p_TYPE, p_CR
-    dq p_BRANCH, numTest_n1
-numTest_f1:
-    dq p_LIT, nt_fail42s, p_COUNT, p_TYPE, p_CR
-numTest_n1:
-    ; "abc" -> expect false
-    dq p_LIT, nt_abc
-    dq p_ISNUM
-    dq p_ZBRANCH, numTest_ok2
-    dq p_DROP
-    dq p_LIT, nt_failabcs, p_COUNT, p_TYPE, p_CR
-    dq p_BRANCH, numTest_n2
-numTest_ok2:
-    dq p_LIT, nt_okabcs, p_COUNT, p_TYPE, p_CR
-numTest_n2:
-    ; "$1F" -> expect true (n=31)
-    dq p_LIT, nt_hex
-    dq p_ISNUM
-    dq p_ZBRANCH, numTest_f3
-    dq p_DROP
-    dq p_LIT, nt_okhexs, p_COUNT, p_TYPE, p_CR
-    dq p_BRANCH, numTest_n3
-numTest_f3:
-    dq p_LIT, nt_failhexs, p_COUNT, p_TYPE, p_CR
-numTest_n3:
-    dq p_EXIT
-
-nt_42       db 2, '42', 0
-nt_abc      db 3, 'abc', 0
-nt_hex      db 3, '$1F', 0
-
-nt_ok42s    db 17, 'is-num(42):  PASS', 10
-nt_fail42s  db 17, 'is-num(42):  FAIL', 10
-nt_okabcs   db 17, 'is-num(abc): PASS', 10
-nt_failabcs db 17, 'is-num(abc): FAIL', 10
-nt_okhexs   db 17, 'is-num($1F): PASS', 10
-nt_failhexs db 17, 'is-num($1F): FAIL', 10
-
-; Test p_NEXTWORD: set TOIN to a known string, parse 3 words, verify 4th is empty
-nwTest:
-    ; TOIN = nwInput
-    dq p_LIT, nwInput
-    dq p_TOIN               ; ( nwInput &TOIN )
-    dq p_STORE              ; TOIN = nwInput, stack empty
-    ; word 1: expect "dup"
-    dq p_NEXTWORD, p_WD, p_COUNT, p_TYPE, p_CR
-    ; word 2: expect "swap"
-    dq p_NEXTWORD, p_WD, p_COUNT, p_TYPE, p_CR
-    ; word 3: expect "42"
-    dq p_NEXTWORD, p_WD, p_COUNT, p_TYPE, p_CR
-    ; word 4: should be empty (WD[0] == 0)
-    dq p_NEXTWORD
-    dq p_WD
-    dq p_CFETCH
-    dq p_ZBRANCH, nwTest_empty
-    dq p_LIT, nwFailStr, p_COUNT, p_TYPE, p_CR
-    dq p_BRANCH, nwTest_done
-nwTest_empty:
-    dq p_LIT, nwOkStr, p_COUNT, p_TYPE, p_CR
-nwTest_done:
-    dq p_EXIT
-
-nwInput     db '  dup  swap  42  ', 0
-nwFailStr   db 21, 'next-word empty: FAIL', 10
-nwOkStr     db 21, 'next-word empty: PASS', 10
-
-; Test file I/O: write string to /tmp/wc64test.tmp, read it back, print it
-fioTest:
-    dq p_TSPI                       ; +L  allocate locals frame (x = fd)
-    ; === write phase (O_WRONLY|O_CREAT|O_TRUNC = 0x241) ===
-    dq p_LIT, fioFile, p_LIT, 0x241
-    dq p_FOPEN                      ; ( fd )
-    dq p_DUP, p_LIT, 0, p_LESS     ; ( fd fd<0 )
-    dq p_ZBRANCH, fio_wOk
-    dq p_DROP, p_LIT, fioErrStr, p_COUNT, p_TYPE, p_CR, p_TSPD, p_BYE
-fio_wOk:
-    dq p_XSTO                       ; x = fd  ( )
-    dq p_LIT, fioData, p_LIT, fioDataLen, p_XFET
-    dq p_FWRITE, p_DROP             ; ( )
-    dq p_XFET, p_FCLOSE             ; ( )
-    ; === read phase (O_RDONLY = 0) ===
-    dq p_LIT, fioFile, p_LIT, 0
-    dq p_FOPEN                      ; ( fd )
-    dq p_DUP, p_LIT, 0, p_LESS
-    dq p_ZBRANCH, fio_rOk
-    dq p_DROP, p_LIT, fioErrStr, p_COUNT, p_TYPE, p_CR, p_TSPD, p_BYE
-fio_rOk:
-    dq p_XSTO                       ; x = fd  ( )
-    dq p_LIT, fioBuf, p_LIT, fioDataLen, p_XFET
-    dq p_FREAD, p_DROP              ; ( )
-    dq p_XFET, p_FCLOSE             ; ( )
-    ; === report ===
-    dq p_LIT, fioPassStr, p_COUNT, p_TYPE, p_CR
-    dq p_LIT, fioBuf, p_LIT, fioDataLen, p_TYPE
-    dq p_TSPD, p_EXIT               ; -L  free locals frame
-
-outerTest:
-    dq p_LIT, outerInput
+    dq p_XFET, p_FCLOSE                 ; close fd
+    ; null-terminate the buffer
+    dq p_LIT, THE_CODE+100000
+    dq p_SLEN
+    dq p_LIT, THE_CODE+100000
+    dq p_PLUS                           ; ( end_addr )
+    dq p_LIT, 0, p_SWAP, p_CSTORE      ; [end] = 0
+    ; call outer with the buffer
+    dq p_LIT, THE_CODE+100000
     dq p_OUTER
-    dq p_EXIT
+    dq p_TSPD, p_BYE
 
-outerInput  db ': double dup + ; 33 double emit', 0
-
-allTests:
-    dq outerTest
-    dq findTest
-    dq numTest
-    dq nwTest
-    dq fioTest
-    dq p_BYE
-
-fioFile     db '/tmp/wc64test.tmp', 0
-fioData     db 'file-io test data', 10
-fioDataLen  = $ - fioData
-fioPassStr  db 13, 'fio-test: ok!', 10
-fioErrStr   db 13, 'fio-test: ERR', 10
-
-; ******************************************************************************
-; END TEST CODE
-; ******************************************************************************
+bootFile    db 'wc64-boot.fth', 0
+bootErrStr  db 'Error: cannot open wc64-boot.fth', 10
+bootErrLen  = $ - bootErrStr
+bootBufSz   = CODE_SZ - 100000
 
 ; ******************************************************************************
 ; Data segment
@@ -1174,7 +1060,6 @@ STATE       dq 0
 TOIN        dq 0
 
 WD          rb 32
-fioBuf      rb 32                   ; TEST DATA: remove with test section
 charBuf     db 0
 spaceStr    db ' '
 crStr       db 10
@@ -1255,4 +1140,4 @@ tStack      rq 64
 
 THE_CODE:   rb CODE_SZ
 THE_DICT:   rb DICT_SZ
-THE_ROM = allTests
+THE_ROM = boot
