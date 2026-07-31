@@ -31,8 +31,8 @@ CODE_SZ =  64*1024
 DICT_SZ =  64*1024
 VARS_SZ = 256*1024
 TIB_SZ  = 128
-xNum    = 0x70000000
-numMask = 0x0FFFFFFF
+xNum    = 0x40000000
+numMask = 0x3FFFFFFF
 LastTag equ 0
 
 ; A dictionary entry looks like this:
@@ -119,7 +119,7 @@ wcRun:  lodsd
         mov     esi, eax
         jmp     wcRun
 .NUM:   and     eax, numMask
-        sPush    eax
+        sPush   eax
         jmp     wcRun
 
 ; ******************************************************************************
@@ -139,12 +139,9 @@ checkRStack:
         cmp     edx, rStack
         jle     .Under
         ret
-.Under: sPush    '-'
-        call    EMIT
-        sPush    'U'
-        call    EMIT
-        sPush    '-'
-        call    EMIT
+.Under: dbgPC   '-'
+        dbgPC   'U'
+        dbgPC   '-'
         mov     [rStackPtr], rStack
         xor     edx, edx
         ret;
@@ -190,12 +187,14 @@ doExecute: ; ( xt-- )
 doNop:  ret
 
 ; ******************************************************************************
-; input:        ; eax: the number to print - destroyed
+; input:        ; eax: the number to print
 ; output:       ; ecx: the start of the string
 ;               ; ebx: the length of the string
 ;
-iToA:   mov     ecx, buf3+63  ; output string start
-        mov     ebx, 0          ; output length
+iToA:   push    eax
+        push    edx
+        mov     ecx, buf3+63    ; output string start
+        xor     ebx, ebx        ; output length
         mov     BYTE [ecx], 0
         push    0               ; isNegative flag
         bt      eax, 31
@@ -204,7 +203,7 @@ iToA:   mov     ecx, buf3+63  ; output string start
         neg     eax
 .L:     push    ebx
         mov     ebx, [BASE]
-        mov     edx, 0
+        xor     edx, edx
         div     ebx
         pop     ebx
         add     dl, '0'
@@ -222,7 +221,9 @@ iToA:   mov     ecx, buf3+63  ; output string start
         dec     ecx
         mov     BYTE [ecx], '-'
         inc     ebx
-.X:     ret
+.X:     pop     edx
+        pop     eax
+        ret
 
 ; ******************************************************************************
 doItoA: sPop    eax
@@ -293,10 +294,10 @@ addWord: ; ( str len-- )
         jz      .NO
         getTOS  eax
         dbgPC   'A'
-        add     eax, (2*CELL_SZ)+3
+        add     eax, (2*CELL_SZ)+3      ; Determine Dict entry size
         mov     edx, [LAST]
         sub     edx, eax
-        push    edx                     ; The new value for LAST
+        push    edx                     ; Save the new value for LAST
         mov     eax, [LAST]
         mov     [edx], eax              ; NEXT
         add     edx, CELL_SZ
@@ -309,8 +310,9 @@ addWord: ; ( str len-- )
         sPop    eax                     ; LEN
         mov     [edx], al
         inc     edx
-        sPush   edx                     ; ( str dst )
-        call    SWAP                    ; ( dst str )
+        sPush   edx                     ; ( src dst )
+        call    SWAP                    ; ( dst src )
+        call    doStrCpy
         pop     edx                     ; Set LAST to the new value
         mov     [LAST], edx
         dbgPC   'Z'
@@ -407,9 +409,9 @@ doUnloop:
         mov     edx, [lStackPtr]
         sub     edx, CELL_SZ*3
         cmp     edx, lStack
-        jge     .XX
+        jge     .X
         mov     edx, lStack
-.XX:    mov     [lStackPtr], edx
+.X:     mov     [lStackPtr], edx
         ret
 
 ; ******************************************************************************
@@ -646,9 +648,9 @@ doStrCpy: ; ( dst src-- )
         sPop    edx
 .L:     mov     al, [ebx]
         mov     [edx], al
-        test    al, al
         inc     edx
         inc     ebx
+        test    al, al
         jnz     .L
         ret
 
@@ -838,15 +840,15 @@ xCold       dd xHA, xDot, xHere, xDot, xLast, xDot, CELL, xDot, doDotS
 xWarm       dd xInterp, JmpA, xWarm
 xInterp     dd xOK, xTIB, xTIBSZ, xAccept, DROP ; , xTIB, PLUS, xNum, SWAP, CStore
                 ; dd xTIB, _DUP, doLen, TYPE, xSpace
-                dd xTIB, xToIn, doStore; , doDotS, xHere, xDot
+                dd xTIB, xToIn, doStore ; , doDotS, xHere, xDot
 xIntLoop        dd nextWd, JmpNZ, xIntNumQ, DROP, EXIT                ; Get next word, exit if no more words
-xIntNumQ:       ; dd Lit, buf2, _DUP, doLen, TYPE, xSpace              ; *** temp ***
-                dd doNumQ, JmpZ, xIntDictQ                              ; Is it a number?
-                ; dd _DUP, xNum+'n', EMIT, doDot, xNum+'n', EMIT       ; *** temp - yes, it is a number! ***
-                dd xCompNum, JmpA, xIntLoop                             ; Yes, it is a number!
-xIntDictQ       dd Lit, buf2, xFind, JmpZ, xIntERR                      ; Is it in the dictionary?
-                dd JmpNZ, xIntImmed                                     ; YES! Is it immediate?
-                ; dd xNum+'C', EMIT, xNum+'-', EMIT, _DUP, xDot        ; *** temp ***
+xIntNumQ:       ; dd Lit, buf2, _DUP, doLen, TYPE, xSpace             ; *** temp ***
+                dd doNumQ, JmpZ, xIntDictQ                            ; Is it a number?
+                ; dd _DUP, xNum+'n', EMIT, doDot, xNum+'n', EMIT      ; *** temp - yes, it is a number! ***
+                dd xCompNum, JmpA, xIntLoop                           ; Yes, it is a number!
+xIntDictQ       dd Lit, buf2, xFind, JmpZ, xIntERR                    ; Is it in the dictionary?
+                dd JmpNZ, xIntImmed                                   ; YES! Is it immediate?
+                ; dd xNum+'C', EMIT, xNum+'-', EMIT, _DUP, xDot       ; *** temp ***
                 dd xExecute, JmpA, xIntLoop
                 dd COMMA, JmpA, xIntLoop
 xIntImmed       dd xNum+'I', EMIT, xNum+'-', EMIT, _DUP, doDot
@@ -889,14 +891,14 @@ xTIB        dd Lit, TIB, EXIT
 xTIBSZ      dd xNum+TIB_SZ, EXIT
 xToIn       dd Lit, ToIn, EXIT
 xAccept     dd doReadL, EXIT
-xFind      dd xLast                                                 ; ( str--xt fl 1 | 0 )
+xFind       dd xLast                                                 ; ( str--xt fl 1 | 0 )
 xFindLoop       dd OVER, OVER, xDeName
                 dd doStrEqI, JmpZ, xFindNext
                 dd SWAP, DROP, _DUP, xDeXT, SWAP, xDeFlags   ; FOUND!
                 dd xNum+1, EXIT
 xFindNext       dd xDeNext, _DUP, JmpNZ, xFindLoop
                 dd DROP, DROP, xNum, EXIT                     ; NOT Found!
-xBench      dd doTimer, Lit, 500000000, _DUP, xDot, doFor, doNext
+xBench      dd doTimer, Lit, 1000000000, _DUP, xDot, doFor, doNext
             dd doTimer, SWAP, MINUS, xDot, EXIT
 xColon      dd nextWd, addWord, xNum+1, xState, doStore, EXIT
 xSemi       dd Lit, EXIT, COMMA, xNum, xState, doStore, EXIT
